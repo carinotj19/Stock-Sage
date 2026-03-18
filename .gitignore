@@ -10,11 +10,9 @@ Thumbs.db
 !.env.example
 !.env.*.example
 
-# Python backend
+# Python artifacts
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 *.so
 .Python
 .venv/
@@ -29,16 +27,14 @@ pip-wheel-metadata/
 .coverage.*
 htmlcov/
 
-# Backend runtime data
-backend/data/*
-!backend/data/.gitkeep
+# Database / local runtime files
 *.sqlite3
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
 
-# Node / frontend
+# Frontend artifacts
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
@@ -46,18 +42,20 @@ frontend/.vercel/
 frontend/coverage/
 *.tsbuildinfo
 
-# Logs and reports
+# Deployment local state
+.vercel/
+
+# Logs / test outputs
 *.log
 playwright-report/
 test-results/
 
-# Cloud/deploy local state
-.vercel/
+# Internal-only content
+docs/
+data/
 
-# Local generated reports/data snapshots
-data/forecast_report*.json
-data/forecast_report*.md
-data/scraper_source_quality*.json
-data/scraper_report*.md
-data/sales_history_import_clean.csv
+# Local scratch files
+convert.py
+input.js
 output.js
+test.html
