@@ -55,6 +55,11 @@ class ForecastReportSummary(BaseModel):
     reorder_required_count: int
     total_suggested_reorder_qty: int
     avg_confidence: float | None
+    mature_sku_count: int | None = None
+    non_mature_sku_count: int | None = None
+    high_confidence_count: int | None = None
+    high_confidence_mature_count: int | None = None
+    high_confidence_non_mature_count: int | None = None
 
 
 class ForecastEvaluationMetrics(BaseModel):
@@ -90,6 +95,7 @@ class ForecastExplainabilityRow(BaseModel):
     reorder_point: int
     suggested_qty: int
     confidence_score: float | None
+    data_tier: str | None = None
     explanation: str
 
 
@@ -101,8 +107,11 @@ class ForecastReportResponse(BaseModel):
     summary: ForecastReportSummary
     evaluation_full: ForecastEvaluationMetrics
     evaluation_mature: ForecastEvaluationMetrics
+    evaluation_non_mature: ForecastEvaluationMetrics | None = None
     mature_sku_criteria: str
     evaluation: ForecastEvaluationMetrics
+    qa_summary: str | None = None
+    qa_report: str | None = None
     markdown_report: str
     explainability_rows: list[ForecastExplainabilityRow]
 

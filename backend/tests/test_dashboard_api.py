@@ -172,9 +172,20 @@ def test_dashboard_endpoints() -> None:
     assert report_payload["evaluation"]["evaluation_days"] == 7
     assert report_payload["evaluation_full"]["evaluation_days"] == 7
     assert report_payload["evaluation_mature"]["evaluation_days"] == 7
+    assert report_payload["evaluation_non_mature"]["evaluation_days"] == 7
     assert report_payload["evaluation"] == report_payload["evaluation_full"]
     assert "history_days>=" in report_payload["mature_sku_criteria"]
+    assert "mature_sku_count" in report_payload["summary"]
+    assert "non_mature_sku_count" in report_payload["summary"]
+    assert "high_confidence_count" in report_payload["summary"]
+    assert "high_confidence_mature_count" in report_payload["summary"]
+    assert "high_confidence_non_mature_count" in report_payload["summary"]
+    assert "qa_summary" in report_payload
+    assert "qa_report" in report_payload
+    assert report_payload["qa_summary"] is None
+    assert report_payload["qa_report"] is None
     assert report_payload["explainability_rows"][0]["sku"] == "SKU-LOW-1"
+    assert report_payload["explainability_rows"][0]["data_tier"] in {"mature", "non_mature"}
     assert "reorder recommendation is 10 units" in report_payload["explainability_rows"][0]["explanation"].lower()
     assert report_payload["markdown_report"].startswith("# Forecast Metrics Report")
 

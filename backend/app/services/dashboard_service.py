@@ -23,6 +23,7 @@ from app.db.models import (
     Supplier,
 )
 from app.jobs.run_forecast_daily import (
+    _apply_champion_lock_guardrail,
     _baseline_forecast_frame,
     _calibrate_confidence,
     _lead_time_operational_backtest,
@@ -52,6 +53,9 @@ from app.schemas.dashboard import (
     SalesTrendPoint,
     StockoutPredictionRow,
 )
+
+MATURE_MAX_HISTORY_LAG_DAYS = 14
+MATURE_MIN_TRAILING_30_NON_ZERO_DAYS = 2
 
 
 class DashboardService:
@@ -443,20 +447,30 @@ class DashboardService:
         return float(mean(values))
 
     @staticmethod
-    def _mature_history_thresholds() -> tuple[int, int, float]:
+    def _mature_history_thresholds() -> tuple[int, int, float, int, int]:
         return (
             max(MIN_HISTORY_DAYS * 2, 42),
             max(MIN_NON_ZERO_DAYS * 2, 12),
             max(MIN_NON_ZERO_RATIO * 2.0, 0.18),
+            MATURE_MAX_HISTORY_LAG_DAYS,
+            MATURE_MIN_TRAILING_30_NON_ZERO_DAYS,
         )
 
     @classmethod
     def _mature_sku_criteria_text(cls) -> str:
-        min_history_days, min_non_zero_days, min_non_zero_ratio = cls._mature_history_thresholds()
+        (
+            min_history_days,
+            min_non_zero_days,
+            min_non_zero_ratio,
+            max_history_lag_days,
+            min_trailing_30_non_zero_days,
+        ) = cls._mature_history_thresholds()
         return (
             f"history_days>={min_history_days}, "
             f"non_zero_days>={min_non_zero_days}, "
-            f"non_zero_ratio>={min_non_zero_ratio * 100:.1f}%"
+            f"non_zero_ratio>={min_non_zero_ratio * 100:.1f}%, "
+            f"history_lag_days<={max_history_lag_days}, "
+            f"trailing_30_non_zero_days>={min_trailing_30_non_zero_days}"
         )
 
     @classmethod
@@ -469,7 +483,13 @@ class DashboardService:
         if history.empty:
             return False
 
-        min_history_days, min_non_zero_days, min_non_zero_ratio = cls._mature_history_thresholds()
+        (
+            min_history_days,
+            min_non_zero_days,
+            min_non_zero_ratio,
+            max_history_lag_days,
+            min_trailing_30_non_zero_days,
+        ) = cls._mature_history_thresholds()
         working_history = history.copy()
         if censored_dates:
             censored_date_values = {pd.Timestamp(value).date() for value in censored_dates}
@@ -478,15 +498,27 @@ class DashboardService:
             if working_history.empty:
                 return False
 
+        working_history["date"] = pd.to_datetime(working_history["date"]).dt.normalize()
+        working_history = working_history.sort_values("date").reset_index(drop=True)
         units = working_history["units"].astype(float)
         history_days = len(units)
         non_zero_days = int((units > 0.0).sum())
         non_zero_ratio = float(non_zero_days / history_days) if history_days > 0 else 0.0
+        trailing_30_non_zero_days = int((units.tail(30) > 0.0).sum()) if history_days > 0 else 0
+        last_history_ts = working_history["date"].max() if history_days > 0 else None
+        history_lag_days = (
+            int((pd.Timestamp.utcnow().date() - pd.Timestamp(last_history_ts).date()).days)
+            if last_history_ts is not None
+            else None
+        )
 
         return (
             history_days >= min_history_days
             and non_zero_days >= min_non_zero_days
             and non_zero_ratio >= min_non_zero_ratio
+            and history_lag_days is not None
+            and history_lag_days <= max_history_lag_days
+            and trailing_30_non_zero_days >= min_trailing_30_non_zero_days
         )
 
     def _evaluate_forecast_quality(self, product_ids: list[int], evaluation_days: int) -> ForecastEvaluationMetrics:
@@ -528,7 +560,12 @@ class DashboardService:
                 movement_dates = pd.to_datetime(stock_movements["occurred_at"]).dt.normalize()
                 train_stock_movements = stock_movements.loc[movement_dates <= cutoff].copy()
 
-            lead_time_wmape, lead_time_baseline_wmape = _lead_time_operational_backtest(
+            (
+                lead_time_wmape,
+                lead_time_baseline_wmape,
+                lead_time_model_win_count,
+                lead_time_windows_evaluated,
+            ) = _lead_time_operational_backtest(
                 train[["date", "units"]],
                 train_stock_movements,
                 lead_time_days,
@@ -539,6 +576,8 @@ class DashboardService:
                 quality,
                 lead_time_wmape_pct=lead_time_wmape,
                 lead_time_baseline_wmape_pct=lead_time_baseline_wmape,
+                lead_time_model_win_count=lead_time_model_win_count,
+                lead_time_windows_evaluated=lead_time_windows_evaluated,
             )
             gate_reason = _recommendation_gate_reason(
                 result.diagnostics.selected_score,
@@ -546,8 +585,17 @@ class DashboardService:
                 confidence,
                 lead_time_wmape_pct=lead_time_wmape,
                 lead_time_baseline_wmape_pct=lead_time_baseline_wmape,
+                lead_time_model_win_count=lead_time_model_win_count,
+                lead_time_windows_evaluated=lead_time_windows_evaluated,
             )
-            action = _recommendation_action(_parse_reason_tokens(gate_reason))
+            reason_tokens = _parse_reason_tokens(gate_reason)
+            action = _recommendation_action(reason_tokens)
+            reason_tokens, action = _apply_champion_lock_guardrail(
+                reason_tokens,
+                action=action,
+                lead_time_model_win_count=lead_time_model_win_count,
+                lead_time_windows_evaluated=lead_time_windows_evaluated,
+            )
 
             forecast_frame = result.forecast_frame
             if action == "baseline_fallback":
@@ -676,6 +724,20 @@ class DashboardService:
         return mapping
 
     @staticmethod
+    def _parse_run_note_value(notes: str | None, key: str) -> str | None:
+        if not notes:
+            return None
+        sections = [section.strip() for section in notes.split("|") if section.strip()]
+        key_prefix = f"{key}="
+        for section in sections:
+            if section.startswith(key_prefix):
+                value = section[len(key_prefix):].strip()
+                if not value or value == "none":
+                    return None
+                return value
+        return None
+
+    @staticmethod
     def _format_optional_metric(value: float | None, decimals: int = 2, suffix: str = "") -> str:
         if value is None:
             return "n/a"
@@ -687,7 +749,10 @@ class DashboardService:
         summary: ForecastReportSummary,
         evaluation_full: ForecastEvaluationMetrics,
         evaluation_mature: ForecastEvaluationMetrics,
+        evaluation_non_mature: ForecastEvaluationMetrics | None,
         mature_sku_criteria: str,
+        qa_summary: str | None,
+        qa_report: str | None,
         rows: list[ForecastExplainabilityRow],
     ) -> str:
         report_lines = [
@@ -698,6 +763,8 @@ class DashboardService:
             f"- Run timestamp: {run.run_at.isoformat()}",
             f"- Horizon days: {run.horizon_days}",
             f"- Model version(s): {run.model_version or 'n/a'}",
+            f"- Data QA summary: {qa_summary or 'n/a'}",
+            f"- Data QA report: {qa_report or 'n/a'}",
             "",
             "## Summary",
             f"- Forecasted SKUs: {summary.sku_count}",
@@ -706,6 +773,14 @@ class DashboardService:
             f"- SKUs needing reorder now: {summary.reorder_required_count}",
             f"- Total suggested reorder quantity: {summary.total_suggested_reorder_qty}",
             f"- Avg confidence: {self._format_optional_metric(summary.avg_confidence, 3)}",
+            f"- Mature SKUs: {summary.mature_sku_count if summary.mature_sku_count is not None else 'n/a'}",
+            f"- Non-mature SKUs: {summary.non_mature_sku_count if summary.non_mature_sku_count is not None else 'n/a'}",
+            (
+                f"- High-confidence SKUs (>=0.70): "
+                f"{summary.high_confidence_count if summary.high_confidence_count is not None else 'n/a'}"
+                f" | mature={summary.high_confidence_mature_count if summary.high_confidence_mature_count is not None else 'n/a'}"
+                f" | non_mature={summary.high_confidence_non_mature_count if summary.high_confidence_non_mature_count is not None else 'n/a'}"
+            ),
             "",
             "## Holdout Evaluation (Full Catalog)",
             f"- Evaluation window: {evaluation_full.evaluation_days} days",
@@ -762,8 +837,44 @@ class DashboardService:
                 f"({evaluation_mature.better_than_baseline_skus}/{evaluation_mature.compared_skus} SKUs improved)"
             ),
             "",
-            "## Top Reorder/Stockout Signals",
+            "## Holdout Evaluation (Non-Mature SKUs)",
         ]
+        non_mature_metrics = evaluation_non_mature or ForecastEvaluationMetrics(
+            evaluation_days=evaluation_full.evaluation_days,
+            evaluated_skus=0,
+            model_mae=None,
+            model_mape_pct=None,
+            model_wmape_pct=None,
+            baseline_mae=None,
+            baseline_mape_pct=None,
+            baseline_wmape_pct=None,
+        )
+        report_lines.extend(
+            [
+                f"- Evaluation window: {non_mature_metrics.evaluation_days} days",
+                f"- Evaluated SKUs: {non_mature_metrics.evaluated_skus}",
+                f"- Model MAE: {self._format_optional_metric(non_mature_metrics.model_mae, 3)}",
+                f"- Model MAPE: {self._format_optional_metric(non_mature_metrics.model_mape_pct, 2, '%')}",
+                f"- Model wMAPE: {self._format_optional_metric(non_mature_metrics.model_wmape_pct, 2, '%')}",
+                f"- Baseline MAE: {self._format_optional_metric(non_mature_metrics.baseline_mae, 3)}",
+                f"- Baseline MAPE: {self._format_optional_metric(non_mature_metrics.baseline_mape_pct, 2, '%')}",
+                f"- Baseline wMAPE: {self._format_optional_metric(non_mature_metrics.baseline_wmape_pct, 2, '%')}",
+                (
+                    f"- MAE improvement vs baseline: "
+                    f"{self._format_optional_metric(non_mature_metrics.mae_improvement_pct, 2, '%')}"
+                ),
+                (
+                    f"- wMAPE improvement vs baseline: "
+                    f"{self._format_optional_metric(non_mature_metrics.wmape_improvement_pct, 2, '%')}"
+                ),
+                "",
+            ]
+        )
+        report_lines.extend(
+            [
+            "## Top Reorder/Stockout Signals",
+            ]
+        )
 
         if not rows:
             report_lines.append("- No explainability rows available for this run.")
@@ -835,6 +946,8 @@ class DashboardService:
         rows = self.db.execute(statement).all()
         gated_map = self._parse_run_note_map(run.notes, "gated")
         fallback_map = self._parse_run_note_map(run.notes, "fallback")
+        qa_summary = self._parse_run_note_value(run.notes, "qa")
+        qa_report = self._parse_run_note_value(run.notes, "qa_report")
 
         explainability_rows: list[ForecastExplainabilityRow] = []
         for product, recommendation, on_hand_qty, lead_time_days_default, predicted_units_total in rows:
@@ -879,17 +992,8 @@ class DashboardService:
                 row.explanation = self._build_reorder_explanation(row)
             explainability_rows.append(row)
 
-        confidence_values = [row.confidence_score for row in explainability_rows if row.confidence_score is not None]
-        summary = ForecastReportSummary(
-            sku_count=len(explainability_rows),
-            recommendations_count=len(explainability_rows),
-            stockout_within_horizon_count=sum(1 for row in explainability_rows if row.predicted_stockout_date is not None),
-            reorder_required_count=sum(1 for row in explainability_rows if row.suggested_qty > 0),
-            total_suggested_reorder_qty=sum(row.suggested_qty for row in explainability_rows),
-            avg_confidence=float(mean(confidence_values)) if confidence_values else None,
-        )
         product_ids = [row.product_id for row in explainability_rows]
-        mature_product_ids: list[int] = []
+        mature_product_id_set: set[int] = set()
         for product_id in product_ids:
             history = self._load_sales_history_dense(product_id)
             stock_movements = self._load_stock_movements(product_id)
@@ -898,7 +1002,35 @@ class DashboardService:
                 stock_movements=stock_movements,
             )
             if self._is_mature_history(history, censored_dates=censored_dates):
-                mature_product_ids.append(product_id)
+                mature_product_id_set.add(product_id)
+
+        for row in explainability_rows:
+            row.data_tier = "mature" if row.product_id in mature_product_id_set else "non_mature"
+
+        mature_product_ids = [product_id for product_id in product_ids if product_id in mature_product_id_set]
+        non_mature_product_ids = [product_id for product_id in product_ids if product_id not in mature_product_id_set]
+
+        confidence_values = [row.confidence_score for row in explainability_rows if row.confidence_score is not None]
+        high_confidence_rows = [
+            row
+            for row in explainability_rows
+            if row.confidence_score is not None and float(row.confidence_score) >= 0.70
+        ]
+        high_confidence_mature_rows = [row for row in high_confidence_rows if row.data_tier == "mature"]
+        high_confidence_non_mature_rows = [row for row in high_confidence_rows if row.data_tier == "non_mature"]
+        summary = ForecastReportSummary(
+            sku_count=len(explainability_rows),
+            recommendations_count=len(explainability_rows),
+            stockout_within_horizon_count=sum(1 for row in explainability_rows if row.predicted_stockout_date is not None),
+            reorder_required_count=sum(1 for row in explainability_rows if row.suggested_qty > 0),
+            total_suggested_reorder_qty=sum(row.suggested_qty for row in explainability_rows),
+            avg_confidence=float(mean(confidence_values)) if confidence_values else None,
+            mature_sku_count=len(mature_product_ids),
+            non_mature_sku_count=len(non_mature_product_ids),
+            high_confidence_count=len(high_confidence_rows),
+            high_confidence_mature_count=len(high_confidence_mature_rows),
+            high_confidence_non_mature_count=len(high_confidence_non_mature_rows),
+        )
         mature_sku_criteria = self._mature_sku_criteria_text()
 
         evaluation_full = self._evaluate_forecast_quality(
@@ -909,12 +1041,19 @@ class DashboardService:
             mature_product_ids,
             evaluation_days=evaluation_days,
         )
+        evaluation_non_mature = self._evaluate_forecast_quality(
+            non_mature_product_ids,
+            evaluation_days=evaluation_days,
+        )
         markdown_report = self._render_markdown_report(
             run,
             summary,
             evaluation_full,
             evaluation_mature,
+            evaluation_non_mature,
             mature_sku_criteria,
+            qa_summary,
+            qa_report,
             explainability_rows,
         )
 
@@ -926,8 +1065,11 @@ class DashboardService:
             summary=summary,
             evaluation_full=evaluation_full,
             evaluation_mature=evaluation_mature,
+            evaluation_non_mature=evaluation_non_mature,
             mature_sku_criteria=mature_sku_criteria,
             evaluation=evaluation_full,
+            qa_summary=qa_summary,
+            qa_report=qa_report,
             markdown_report=markdown_report,
             explainability_rows=explainability_rows if include_details else [],
         )

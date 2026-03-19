@@ -7,9 +7,12 @@ import numpy as np
 import pandas as pd
 
 from app.ml.model_registry import (
+    ADIDAForecastModel,
     CandidateScore,
+    IMAPAForecastModel,
     IntermittentDemandModel,
     NaiveMovingAverageModel,
+    TSBForecastModel,
     select_best_model_with_backtest,
 )
 
@@ -23,7 +26,7 @@ STOCKOUT_RESTOCK_LOOKAHEAD_DAYS = 1
 MATURE_HISTORY_DAYS = max(MIN_HISTORY_DAYS * 2, 42)
 MATURE_NON_ZERO_DAYS = max(MIN_NON_ZERO_DAYS * 2, 12)
 MATURE_NON_ZERO_RATIO = max(MIN_NON_ZERO_RATIO * 2.0, 0.18)
-SPARSE_ALLOWED_MODELS = {"Intermittent", "NaiveMA"}
+SPARSE_ALLOWED_MODELS = {"Intermittent", "TSB", "ADIDA", "IMAPA", "NaiveMA"}
 NON_SPARSE_ALLOWED_MODELS = {"NaiveMA", "ARIMA", "Prophet", "XGBoost"}
 OCCURRENCE_SHORT_WINDOW_DAYS = 21
 OCCURRENCE_LONG_WINDOW_DAYS = 84
@@ -34,7 +37,90 @@ TWO_STAGE_MIN_SIZE = 0.1
 BIAS_HOLDOUT_MIN_DAYS = 7
 BIAS_HOLDOUT_MAX_DAYS = 14
 BIAS_MIN_TRAIN_DAYS = 21
-BIAS_SHRINK_FACTOR = 0.75
+BIAS_SHRINK_FACTOR = 0.45
+BIAS_MIN_WMAPE_GAIN_PCT = 0.5
+MATURE_POSTPROCESS_HOLDOUT_MIN_DAYS = 7
+MATURE_POSTPROCESS_HOLDOUT_MAX_DAYS = 14
+MATURE_POSTPROCESS_MIN_TRAIN_DAYS = 28
+MATURE_POSTPROCESS_SWITCH_MIN_WMAPE_GAIN_PCT = 0.5
+
+
+def _should_apply_two_stage(quality: ForecastDataQuality) -> bool:
+    return quality.status != "insufficient_history"
+
+
+def _should_bypass_postprocessing_for_mature_naive(
+    *,
+    quality: ForecastDataQuality,
+    selected_model_name: str,
+) -> bool:
+    return (
+        selected_model_name == "NaiveMA"
+        and quality.data_tier == "mature"
+        and quality.status == "ok"
+    )
+
+
+def _prefer_raw_for_mature_series(
+    series: pd.Series,
+    quality: ForecastDataQuality,
+    selected_model_name: str,
+    lead_time_days: int | None = None,
+) -> tuple[bool, float | None, float | None]:
+    if quality.data_tier != "mature" or quality.status != "ok":
+        return (False, None, None)
+
+    total_days = len(series)
+    min_days_required = MATURE_POSTPROCESS_MIN_TRAIN_DAYS + MATURE_POSTPROCESS_HOLDOUT_MIN_DAYS
+    if total_days < min_days_required:
+        return (False, None, None)
+
+    holdout_days = min(
+        MATURE_POSTPROCESS_HOLDOUT_MAX_DAYS,
+        max(MATURE_POSTPROCESS_HOLDOUT_MIN_DAYS, total_days // 8),
+    )
+    split_at = total_days - holdout_days
+    if split_at < MATURE_POSTPROCESS_MIN_TRAIN_DAYS:
+        return (False, None, None)
+
+    train = series.iloc[:split_at].astype(float).clip(lower=0.0)
+    valid = series.iloc[split_at:].astype(float).clip(lower=0.0)
+    if train.empty or valid.empty:
+        return (False, None, None)
+
+    try:
+        model = _build_model_for_name(selected_model_name, len(train))
+        model.fit(train)
+        raw_pred = np.maximum(np.asarray(model.predict(len(valid)), dtype=float), 0.0)
+    except Exception:
+        return (False, None, None)
+
+    actual = valid.to_numpy(dtype=float)
+    horizon = min(len(actual), len(raw_pred))
+    if horizon == 0:
+        return (False, None, None)
+    compare_horizon = horizon
+    if lead_time_days is not None and lead_time_days > 0:
+        compare_horizon = min(compare_horizon, int(lead_time_days))
+    actual = actual[:compare_horizon]
+    raw_pred = raw_pred[:compare_horizon]
+
+    raw_wmape = _wmape_pct(actual, raw_pred)
+    if raw_wmape is None:
+        return (False, None, None)
+
+    valid_dates = pd.DatetimeIndex(valid.index[:compare_horizon])
+    two_stage_pred, _, _, _, _, _ = _compose_two_stage_forecast(raw_pred, train, quality, valid_dates)
+    two_stage_wmape = _wmape_pct(actual, two_stage_pred[:compare_horizon])
+    if two_stage_wmape is None:
+        return (False, raw_wmape, None)
+
+    # For mature series, default to raw model output and only keep two-stage
+    # when it has a clear holdout advantage.
+    prefer_raw = True
+    if (two_stage_wmape + MATURE_POSTPROCESS_SWITCH_MIN_WMAPE_GAIN_PCT) < raw_wmape:
+        prefer_raw = False
+    return (prefer_raw, raw_wmape, two_stage_wmape)
 
 
 @dataclass
@@ -75,6 +161,13 @@ def _empty_forecast_frame(horizon_days: int) -> pd.DataFrame:
             "upper_ci": [0.0] * horizon_days,
         }
     )
+
+
+def _wmape_pct(y_true: np.ndarray, y_pred: np.ndarray) -> float | None:
+    denom = float(np.sum(np.abs(y_true)))
+    if denom <= 0:
+        return None
+    return float(np.sum(np.abs(y_true - y_pred)) / denom * 100.0)
 
 
 def _to_dense_daily_series(sales_history: pd.DataFrame) -> pd.Series:
@@ -327,6 +420,12 @@ def _build_model_for_name(model_name: str, history_days: int):
         return NaiveMovingAverageModel(window=max(1, min(7, history_days)))
     if model_name == "Intermittent":
         return IntermittentDemandModel()
+    if model_name == "TSB":
+        return TSBForecastModel()
+    if model_name == "ADIDA":
+        return ADIDAForecastModel()
+    if model_name == "IMAPA":
+        return IMAPAForecastModel()
     if model_name == "ARIMA":
         from app.ml.model_registry import ARIMAForecastModel
 
@@ -476,20 +575,23 @@ def _compose_two_stage_forecast(
     )
 
 
-def _estimate_holdout_residual_bias(series: pd.Series, selected_model_name: str) -> tuple[float, int]:
+def _estimate_holdout_actual_and_prediction(
+    series: pd.Series,
+    selected_model_name: str,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
     history = series.astype(float).clip(lower=0.0)
     if len(history) < BIAS_MIN_TRAIN_DAYS + BIAS_HOLDOUT_MIN_DAYS:
-        return 0.0, 0
+        return (None, None)
 
     holdout_days = min(BIAS_HOLDOUT_MAX_DAYS, max(BIAS_HOLDOUT_MIN_DAYS, len(history) // 5))
     split_at = len(history) - holdout_days
     if split_at < BIAS_MIN_TRAIN_DAYS:
-        return 0.0, 0
+        return (None, None)
 
     train = history.iloc[:split_at]
     valid = history.iloc[split_at:]
     if train.empty or valid.empty:
-        return 0.0, 0
+        return (None, None)
 
     try:
         model = _build_model_for_name(selected_model_name, len(train))
@@ -502,15 +604,20 @@ def _estimate_holdout_residual_bias(series: pd.Series, selected_model_name: str)
 
     horizon = min(len(pred), len(valid))
     if horizon == 0:
-        return 0.0, 0
+        return (None, None)
 
     actual = valid.iloc[:horizon].to_numpy(dtype=float)
-    residuals = actual - pred[:horizon]
+    forecast = np.maximum(pred[:horizon], 0.0)
+    return actual, forecast
+
+
+def _estimate_holdout_residual_bias(actual: np.ndarray, forecast: np.ndarray) -> float:
+    residuals = actual - forecast
     if residuals.size >= 5:
         low, high = np.quantile(residuals, [0.10, 0.90])
         residuals = np.clip(residuals, low, high)
 
-    return float(np.mean(residuals)), int(horizon)
+    return float(np.mean(residuals))
 
 
 def _apply_residual_bias_correction(
@@ -522,15 +629,26 @@ def _apply_residual_bias_correction(
     if forecast.size == 0:
         return forecast, 0.0, 0
 
-    residual_bias, bias_points = _estimate_holdout_residual_bias(history_series, selected_model_name)
-    if bias_points == 0:
+    holdout_actual, holdout_forecast = _estimate_holdout_actual_and_prediction(history_series, selected_model_name)
+    if holdout_actual is None or holdout_forecast is None:
         return forecast, 0.0, 0
+    bias_points = len(holdout_actual)
+    residual_bias = _estimate_holdout_residual_bias(holdout_actual, holdout_forecast)
 
     recent = history_series.astype(float).clip(lower=0.0).tail(min(60, len(history_series)))
     variability = max(float(recent.std(ddof=0)) if len(recent) > 1 else 0.0, 0.5)
     max_shift = max(0.75, variability * 2.5)
 
     adjusted_bias = float(np.clip(residual_bias * BIAS_SHRINK_FACTOR, -max_shift, max_shift))
+    holdout_wmape = _wmape_pct(holdout_actual, holdout_forecast)
+    corrected_holdout_wmape = _wmape_pct(holdout_actual, np.maximum(holdout_forecast + adjusted_bias, 0.0))
+    if (
+        holdout_wmape is not None
+        and corrected_holdout_wmape is not None
+        and (holdout_wmape - corrected_holdout_wmape) < BIAS_MIN_WMAPE_GAIN_PCT
+    ):
+        return forecast, 0.0, bias_points
+
     corrected = np.maximum(forecast + adjusted_bias, 0.0)
     return corrected, adjusted_bias, bias_points
 
@@ -643,35 +761,64 @@ def forecast_product_daily_units_with_diagnostics(
     forecast_dates = pd.date_range(start_date, periods=horizon_days, freq="D")
 
     raw_prediction = np.asarray(model.predict(horizon_days), dtype=float)
-    two_stage_prediction, target_occ, predicted_occ, occ_scale, weekday_occ, size_baseline = _compose_two_stage_forecast(
-        raw_prediction,
-        adjusted_series,
-        quality,
-        forecast_dates,
+    bypass_mature_naive_postprocessing = _should_bypass_postprocessing_for_mature_naive(
+        quality=quality,
+        selected_model_name=selected_model_name,
     )
-    if abs(occ_scale - 1.0) >= 0.05:
-        quality.notes.append(
-            (
-                "Applied occurrence calibration "
-                f"(target={target_occ:.2f}, predicted={predicted_occ:.2f}, scale={occ_scale:.2f})."
+    if bypass_mature_naive_postprocessing:
+        two_stage_prediction = np.maximum(raw_prediction, 0.0)
+        quality.notes.append("Skipped two-stage decomposition for mature NaiveMA baseline behavior.")
+    elif _should_apply_two_stage(quality):
+        two_stage_prediction, target_occ, predicted_occ, occ_scale, weekday_occ, size_baseline = _compose_two_stage_forecast(
+            raw_prediction,
+            adjusted_series,
+            quality,
+            forecast_dates,
+        )
+        prefer_raw, raw_backtest_wmape, two_stage_backtest_wmape = _prefer_raw_for_mature_series(
+            adjusted_series,
+            quality,
+            selected_model_name,
+            lead_time_days=lead_time_days,
+        )
+        if prefer_raw:
+            two_stage_prediction = np.maximum(raw_prediction, 0.0)
+            quality.notes.append(
+                "Selected raw post-processing for mature demand "
+                f"(raw_wmape={raw_backtest_wmape:.2f}, two_stage_wmape={two_stage_backtest_wmape:.2f})."
             )
-        )
-    quality.notes.append(
-        (
-            "Applied two-stage demand decomposition "
-            f"(weekday_occ={weekday_occ:.2f}, conditional_size={size_baseline:.2f})."
-        )
-    )
+        else:
+            if abs(occ_scale - 1.0) >= 0.05:
+                quality.notes.append(
+                    (
+                        "Applied occurrence calibration "
+                        f"(target={target_occ:.2f}, predicted={predicted_occ:.2f}, scale={occ_scale:.2f})."
+                    )
+                )
+            quality.notes.append(
+                (
+                    "Applied two-stage demand decomposition "
+                    f"(weekday_occ={weekday_occ:.2f}, conditional_size={size_baseline:.2f})."
+                )
+            )
+    else:
+        two_stage_prediction = np.maximum(raw_prediction, 0.0)
+        quality.notes.append("Skipped two-stage demand decomposition due to insufficient history.")
 
-    bias_adjusted, bias_shift, bias_points = _apply_residual_bias_correction(
-        two_stage_prediction,
-        adjusted_series,
-        selected_model_name,
-    )
-    if bias_points > 0 and abs(bias_shift) >= 0.05:
-        quality.notes.append(
-            f"Applied residual bias correction over {bias_points} holdout day(s) with shift={bias_shift:.2f}."
+    if bypass_mature_naive_postprocessing:
+        bias_adjusted = np.maximum(two_stage_prediction, 0.0)
+        bias_shift = 0.0
+        bias_points = 0
+    else:
+        bias_adjusted, bias_shift, bias_points = _apply_residual_bias_correction(
+            two_stage_prediction,
+            adjusted_series,
+            selected_model_name,
         )
+        if bias_points > 0 and abs(bias_shift) >= 0.05:
+            quality.notes.append(
+                f"Applied residual bias correction over {bias_points} holdout day(s) with shift={bias_shift:.2f}."
+            )
 
     prediction, capped_days = _cap_forecast_spikes(bias_adjusted, adjusted_series, quality)
     if capped_days > 0:

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from app.ml.predict import (
@@ -7,6 +8,7 @@ from app.ml.predict import (
     _apply_residual_bias_correction,
     _calibrate_occurrence_probability,
     _cap_forecast_spikes,
+    _prefer_raw_for_mature_series,
     estimate_censored_sales_dates,
     forecast_product_daily_units_with_diagnostics,
 )
@@ -48,18 +50,120 @@ def test_sparse_sales_restricts_model_selection_to_robust_fallbacks() -> None:
 
     assert result.diagnostics.quality.status == "sparse_sales"
     assert result.diagnostics.quality.data_tier == "sparse"
-    assert result.diagnostics.selected_model_name in {"Intermittent", "NaiveMA"}
+    assert result.diagnostics.selected_model_name in {"Intermittent", "TSB", "ADIDA", "IMAPA", "NaiveMA"}
     assert len(result.forecast_frame) == 7
 
 
-def test_non_sparse_sales_excludes_intermittent_candidate() -> None:
+def test_non_sparse_sales_avoids_sparse_specialist_models() -> None:
     units = [3, 4, 2, 5, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5]
     history = _build_daily_history(datetime(2026, 1, 1), units)
     result = forecast_product_daily_units_with_diagnostics(history, horizon_days=7)
 
     assert result.diagnostics.quality.status == "ok"
-    assert result.diagnostics.selected_model_name != "Intermittent"
+    assert result.diagnostics.selected_model_name not in {"Intermittent", "TSB", "ADIDA", "IMAPA"}
     assert len(result.forecast_frame) == 7
+
+
+def test_mature_dense_series_uses_adaptive_postprocessing_note() -> None:
+    units = [3, 4, 2, 5, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5, 4, 3, 5, 4, 3, 4, 2, 5]
+    history = _build_daily_history(datetime(2026, 1, 1), units)
+    result = forecast_product_daily_units_with_diagnostics(history, horizon_days=7)
+
+    assert result.diagnostics.quality.data_tier == "mature"
+    assert any(
+        (
+            "Selected raw post-processing for mature demand" in note
+            or "Applied two-stage demand decomposition" in note
+            or "Skipped two-stage decomposition for mature NaiveMA baseline behavior." in note
+        )
+        for note in result.diagnostics.quality.notes
+    )
+
+
+def test_prefer_raw_for_mature_series_when_two_stage_is_worse(monkeypatch) -> None:
+    values = [10.0] * 40
+    index = pd.date_range(datetime(2026, 1, 1), periods=len(values), freq="D")
+    series = pd.Series(values, index=index, dtype=float)
+    quality = ForecastDataQuality(
+        status="ok",
+        history_days=len(values),
+        non_zero_days=len(values),
+        non_zero_ratio=1.0,
+        capped_outlier_days=0,
+        suspected_stockout_days=0,
+        data_tier="mature",
+        effective_history_days=len(values),
+        notes=[],
+    )
+
+    class _FlatModel:
+        def fit(self, fit_series: pd.Series) -> None:  # noqa: ARG002
+            return None
+
+        def predict(self, horizon_days: int) -> np.ndarray:
+            return np.full(horizon_days, 7.0, dtype=float)
+
+    monkeypatch.setattr("app.ml.predict._build_model_for_name", lambda model_name, history_days: _FlatModel())
+
+    def _degraded_two_stage(
+        prediction: np.ndarray,
+        history_series: pd.Series,  # noqa: ARG001
+        quality_arg: ForecastDataQuality,  # noqa: ARG001
+        forecast_dates: pd.DatetimeIndex,  # noqa: ARG001
+    ) -> tuple[np.ndarray, float, float, float, float, float]:
+        degraded = np.maximum(np.asarray(prediction, dtype=float) - 5.0, 0.0)
+        return degraded, 0.5, 1.0, 0.5, 0.5, 10.0
+
+    monkeypatch.setattr("app.ml.predict._compose_two_stage_forecast", _degraded_two_stage)
+
+    prefer_raw, raw_wmape, two_stage_wmape = _prefer_raw_for_mature_series(series, quality, "NaiveMA")
+
+    assert prefer_raw is True
+    assert raw_wmape is not None and two_stage_wmape is not None
+    assert raw_wmape < two_stage_wmape
+
+
+def test_prefer_raw_for_mature_series_keeps_two_stage_when_clearly_better(monkeypatch) -> None:
+    values = [10.0] * 40
+    index = pd.date_range(datetime(2026, 1, 1), periods=len(values), freq="D")
+    series = pd.Series(values, index=index, dtype=float)
+    quality = ForecastDataQuality(
+        status="ok",
+        history_days=len(values),
+        non_zero_days=len(values),
+        non_zero_ratio=1.0,
+        capped_outlier_days=0,
+        suspected_stockout_days=0,
+        data_tier="mature",
+        effective_history_days=len(values),
+        notes=[],
+    )
+
+    class _FlatModel:
+        def fit(self, fit_series: pd.Series) -> None:  # noqa: ARG002
+            return None
+
+        def predict(self, horizon_days: int) -> np.ndarray:
+            return np.full(horizon_days, 7.0, dtype=float)
+
+    monkeypatch.setattr("app.ml.predict._build_model_for_name", lambda model_name, history_days: _FlatModel())
+
+    def _better_two_stage(
+        prediction: np.ndarray,
+        history_series: pd.Series,  # noqa: ARG001
+        quality_arg: ForecastDataQuality,  # noqa: ARG001
+        forecast_dates: pd.DatetimeIndex,  # noqa: ARG001
+    ) -> tuple[np.ndarray, float, float, float, float, float]:
+        improved = np.maximum(np.asarray(prediction, dtype=float) + 3.0, 0.0)
+        return improved, 0.5, 1.0, 1.0, 0.5, 10.0
+
+    monkeypatch.setattr("app.ml.predict._compose_two_stage_forecast", _better_two_stage)
+
+    prefer_raw, raw_wmape, two_stage_wmape = _prefer_raw_for_mature_series(series, quality, "NaiveMA")
+
+    assert prefer_raw is False
+    assert raw_wmape is not None and two_stage_wmape is not None
+    assert two_stage_wmape < raw_wmape
 
 
 def test_stockout_censoring_uses_restock_signal_for_short_zero_runs() -> None:

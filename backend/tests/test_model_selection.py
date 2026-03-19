@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 
 from app.ml.model_registry import (
+    ADIDAForecastModel,
     CandidateScore,
+    IMAPAForecastModel,
+    TSBForecastModel,
+    _candidate_model_factories,
     _rank_key,
     _select_with_global_guardrail,
     select_best_model_with_backtest,
@@ -110,3 +114,41 @@ def test_global_guardrail_prefers_global_wmape_when_leadtime_choice_is_too_costl
     )
     selected = _select_with_global_guardrail([leadtime_favored, global_best])
     assert selected.model_name == "GlobalBest"
+
+
+def test_candidate_factory_includes_intermittent_specialists() -> None:
+    names = {name for name, _ in _candidate_model_factories()}
+    assert {"Intermittent", "TSB", "ADIDA", "IMAPA"}.issubset(names)
+
+
+def test_tsb_predicts_non_negative_rate_for_intermittent_series() -> None:
+    dates = pd.date_range(datetime(2026, 1, 1), periods=30, freq="D")
+    values = np.array([0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0])
+    series = pd.Series(values, index=dates, dtype=float)
+
+    model = TSBForecastModel()
+    model.fit(series)
+    pred = model.predict(7)
+
+    assert len(pred) == 7
+    assert np.all(pred >= 0.0)
+    assert float(np.mean(pred)) > 0.0
+
+
+def test_adida_and_imapa_predict_non_negative_rates() -> None:
+    dates = pd.date_range(datetime(2026, 1, 1), periods=28, freq="D")
+    values = np.array([0, 2, 0, 0, 4, 0, 0, 0, 3, 0, 0, 5, 0, 0, 0, 2, 0, 0, 4, 0, 0, 0, 3, 0, 0, 5, 0, 0])
+    series = pd.Series(values, index=dates, dtype=float)
+
+    adida = ADIDAForecastModel()
+    adida.fit(series)
+    adida_pred = adida.predict(10)
+
+    imapa = IMAPAForecastModel()
+    imapa.fit(series)
+    imapa_pred = imapa.predict(10)
+
+    assert len(adida_pred) == 10
+    assert len(imapa_pred) == 10
+    assert np.all(adida_pred >= 0.0)
+    assert np.all(imapa_pred >= 0.0)

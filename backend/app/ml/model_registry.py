@@ -100,6 +100,134 @@ class IntermittentDemandModel:
         return np.full(horizon_days, self._rate, dtype=float)
 
 
+@dataclass
+class TSBForecastModel:
+    alpha_demand: float = 0.2
+    beta_occurrence: float = 0.1
+    name: str = "TSB"
+    _rate: float = 0.0
+
+    def fit(self, series: pd.Series) -> None:
+        history = series.astype(float).clip(lower=0.0).to_numpy(dtype=float)
+        if history.size == 0:
+            self._rate = 0.0
+            return
+
+        hits = history > 0.0
+        if not bool(np.any(hits)):
+            self._rate = 0.0
+            return
+
+        alpha = float(max(0.05, min(0.4, self.alpha_demand)))
+        beta = float(max(0.05, min(0.4, self.beta_occurrence)))
+
+        demand_hat = float(np.mean(history[hits]))
+        occurrence_hat = float(np.mean(hits.astype(float)))
+
+        for value in history:
+            hit = 1.0 if value > 0.0 else 0.0
+            occurrence_hat = occurrence_hat + (beta * (hit - occurrence_hat))
+            if hit > 0.0:
+                demand_hat = demand_hat + (alpha * (float(value) - demand_hat))
+
+        self._rate = max(occurrence_hat * demand_hat, 0.0)
+
+    def predict(self, horizon_days: int) -> np.ndarray:
+        return np.full(horizon_days, self._rate, dtype=float)
+
+
+@dataclass
+class ADIDAForecastModel:
+    max_bucket_days: int = 14
+    name: str = "ADIDA"
+    _daily_rate: float = 0.0
+
+    @staticmethod
+    def _aggregate(series_values: np.ndarray, bucket_days: int) -> np.ndarray:
+        if series_values.size == 0:
+            return np.array([], dtype=float)
+        bucket = max(1, int(bucket_days))
+        groups = []
+        for start in range(0, series_values.size, bucket):
+            groups.append(float(np.sum(series_values[start:start + bucket])))
+        return np.asarray(groups, dtype=float)
+
+    def fit(self, series: pd.Series) -> None:
+        history = series.astype(float).clip(lower=0.0).to_numpy(dtype=float)
+        if history.size == 0:
+            self._daily_rate = 0.0
+            return
+
+        non_zero_days = int(np.count_nonzero(history > 0.0))
+        if non_zero_days == 0:
+            self._daily_rate = 0.0
+            return
+
+        adi = float(history.size / max(non_zero_days, 1))
+        bucket_days = max(1, min(int(round(adi)), int(self.max_bucket_days)))
+        aggregated = self._aggregate(history, bucket_days)
+        if aggregated.size == 0:
+            self._daily_rate = 0.0
+            return
+
+        window = max(1, min(3, aggregated.size))
+        aggregated_forecast = float(np.mean(aggregated[-window:]))
+        self._daily_rate = max(aggregated_forecast / max(bucket_days, 1), 0.0)
+
+    def predict(self, horizon_days: int) -> np.ndarray:
+        return np.full(horizon_days, self._daily_rate, dtype=float)
+
+
+@dataclass
+class IMAPAForecastModel:
+    max_bucket_days: int = 14
+    name: str = "IMAPA"
+    _daily_rate: float = 0.0
+
+    @staticmethod
+    def _aggregate(series_values: np.ndarray, bucket_days: int) -> np.ndarray:
+        if series_values.size == 0:
+            return np.array([], dtype=float)
+        bucket = max(1, int(bucket_days))
+        groups = []
+        for start in range(0, series_values.size, bucket):
+            groups.append(float(np.sum(series_values[start:start + bucket])))
+        return np.asarray(groups, dtype=float)
+
+    def fit(self, series: pd.Series) -> None:
+        history = series.astype(float).clip(lower=0.0).to_numpy(dtype=float)
+        if history.size == 0:
+            self._daily_rate = 0.0
+            return
+
+        non_zero_days = int(np.count_nonzero(history > 0.0))
+        if non_zero_days == 0:
+            self._daily_rate = 0.0
+            return
+
+        adi = float(history.size / max(non_zero_days, 1))
+        upper_bucket = max(1, min(int(round(adi)), int(self.max_bucket_days)))
+        levels = list(range(1, upper_bucket + 1))
+
+        daily_rates: list[float] = []
+        for bucket_days in levels:
+            aggregated = self._aggregate(history, bucket_days)
+            if aggregated.size == 0:
+                continue
+            window = max(1, min(3, aggregated.size))
+            aggregated_forecast = float(np.mean(aggregated[-window:]))
+            daily_rate = max(aggregated_forecast / max(bucket_days, 1), 0.0)
+            daily_rates.append(daily_rate)
+
+        if not daily_rates:
+            self._daily_rate = 0.0
+            return
+        self._daily_rate = float(max(np.median(np.asarray(daily_rates, dtype=float)), 0.0))
+
+    def predict(self, horizon_days: int) -> np.ndarray:
+        return np.full(horizon_days, self._daily_rate, dtype=float)
+
+
 class ARIMAForecastModel:
     name = "ARIMA"
 
@@ -208,6 +336,9 @@ def _candidate_model_factories() -> list[tuple[str, Callable[[], ForecastModel]]
     factories: list[tuple[str, Callable[[], ForecastModel]]] = [
         ("NaiveMA", lambda: NaiveMovingAverageModel(window=7)),
         ("Intermittent", IntermittentDemandModel),
+        ("TSB", TSBForecastModel),
+        ("ADIDA", ADIDAForecastModel),
+        ("IMAPA", IMAPAForecastModel),
     ]
 
     try:
