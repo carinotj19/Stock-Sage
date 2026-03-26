@@ -1,10 +1,6 @@
 # Stock Sage
 
-Stock Sage is a thesis-aligned inventory intelligence prototype for Sumtech Enterprises. It combines inventory and sales management, daily demand forecasting, reorder recommendations, competitor price scraping, and dashboard reporting in a React + FastAPI stack.
-
-## Current Status
-
-This repository is already usable as a strong prototype baseline for the thesis. Core inventory, sales, forecasting, scraper, and dashboard workflows are implemented. Current work is focused on forecast-quality tuning, explainability, usability evaluation, and notification delivery.
+Stock Sage is a thesis-aligned inventory intelligence prototype. It combines inventory and sales management, daily demand forecasting, reorder recommendations, competitor price scraping, and dashboard reporting in a React + FastAPI stack.
 
 ## Core Features
 
