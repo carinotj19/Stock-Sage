@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from math import comb
+from pathlib import Path
 from random import Random
 from statistics import mean
 import json
@@ -41,6 +42,16 @@ from app.ml.predict import (
 from app.schemas.dashboard import (
     DashboardKpis,
     ForecastEvaluationMetrics,
+    ForecastRunComparisonDelta,
+    ForecastRunComparisonMetrics,
+    ForecastRunComparisonResponse,
+    ForecastRunComparisonRun,
+    ForecastRunComparisonSkuRow,
+    ForecastRunValidationComparison,
+    ForecastRunValidationDelta,
+    ForecastRunValidationSkuRow,
+    ForecastRunValidationSnapshot,
+    ForecastRunComparisonWindow,
     ForecastExplainabilityRow,
     ForecastReportResponse,
     ForecastReportSummary,
@@ -205,6 +216,7 @@ class DashboardService:
                 CompetitorSource.id,
                 CompetitorSource.name,
                 CompetitorSource.enabled,
+                CompetitorSource.last_run_at,
                 CompetitorSource.scrape_config_json,
                 func.max(CompetitorPriceSnapshot.scraped_at).label("latest_scraped_at"),
                 func.count(snapshots_in_window).label("snapshots_24h"),
@@ -215,6 +227,7 @@ class DashboardService:
                 CompetitorSource.id,
                 CompetitorSource.name,
                 CompetitorSource.enabled,
+                CompetitorSource.last_run_at,
                 CompetitorSource.scrape_config_json,
             )
             .order_by(CompetitorSource.name.asc())
@@ -227,9 +240,13 @@ class DashboardService:
             matched_skus_24h = int(row.matched_skus_24h or 0)
             snapshots_24h = int(row.snapshots_24h or 0)
             latest_scraped_at = self._as_utc(row.latest_scraped_at)
+            last_run_at = self._as_utc(row.last_run_at)
+            latest_activity_at = latest_scraped_at
+            if latest_activity_at is None or (last_run_at is not None and last_run_at > latest_activity_at):
+                latest_activity_at = last_run_at
             minutes_since_latest = (
-                int((now_utc - latest_scraped_at).total_seconds() // 60)
-                if latest_scraped_at is not None
+                int((now_utc - latest_activity_at).total_seconds() // 60)
+                if latest_activity_at is not None
                 else None
             )
             coverage_pct = (
@@ -246,9 +263,9 @@ class DashboardService:
             degraded_reason = str(configured_reason).strip() if isinstance(configured_reason, str) else ""
             degraded = (
                 not stale
-                and last_run_attempted > 0
                 and last_run_inserted == 0
                 and consecutive_zero_runs >= 2
+                and (last_run_attempted > 0 or bool(degraded_reason))
             )
             if degraded and not degraded_reason:
                 degraded_reason = "repeated_zero_insert_runs"
@@ -268,7 +285,7 @@ class DashboardService:
                     matched_skus_24h=matched_skus_24h,
                     coverage_pct_24h=coverage_pct,
                     effective_coverage_pct_24h=effective_coverage,
-                    latest_scraped_at=latest_scraped_at,
+                    latest_scraped_at=latest_activity_at,
                     minutes_since_latest=minutes_since_latest,
                     stale=stale,
                     degraded=degraded,
@@ -445,6 +462,21 @@ class DashboardService:
         if not values:
             return None
         return float(mean(values))
+
+    @staticmethod
+    def _float_delta(candidate: float | None, baseline: float | None) -> float | None:
+        if candidate is None or baseline is None:
+            return None
+        return float(candidate - baseline)
+
+    @staticmethod
+    def _improvement_pct(candidate: float | None, baseline: float | None) -> float | None:
+        if candidate is None or baseline is None:
+            return None
+        denominator = abs(float(baseline))
+        if denominator <= 0:
+            return None
+        return ((float(baseline) - float(candidate)) / denominator) * 100.0
 
     @staticmethod
     def _mature_history_thresholds() -> tuple[int, int, float, int, int]:
@@ -898,6 +930,709 @@ class DashboardService:
             )
 
         return "\n".join(report_lines)
+
+    def _resolve_forecast_run_pair(
+        self,
+        *,
+        baseline_run_id: int | None,
+        candidate_run_id: int | None,
+    ) -> tuple[ForecastRun, ForecastRun]:
+        ordered_runs = list(self.db.scalars(select(ForecastRun).order_by(ForecastRun.id.desc())).all())
+        if len(ordered_runs) < 2 and (baseline_run_id is None or candidate_run_id is None):
+            raise ValueError("At least two forecast runs are required for comparison.")
+
+        run_by_id = {run.id: run for run in ordered_runs}
+
+        candidate_run = run_by_id.get(candidate_run_id) if candidate_run_id is not None else None
+        if candidate_run is None:
+            candidate_run = ordered_runs[0] if ordered_runs else None
+
+        if candidate_run is None:
+            raise ValueError("No forecast run found for comparison.")
+
+        baseline_run = run_by_id.get(baseline_run_id) if baseline_run_id is not None else None
+        if baseline_run is None:
+            baseline_run = next((run for run in ordered_runs if run.id != candidate_run.id), None)
+
+        if baseline_run is None:
+            raise ValueError("Could not resolve a baseline forecast run for comparison.")
+        if baseline_run.id == candidate_run.id:
+            raise ValueError("baseline_run_id and candidate_run_id must refer to different runs.")
+
+        if baseline_run.run_at > candidate_run.run_at:
+            baseline_run, candidate_run = candidate_run, baseline_run
+
+        return baseline_run, candidate_run
+
+    def _load_run_forecast_values(
+        self,
+        run_id: int,
+    ) -> tuple[dict[int, dict[str, object]], dict[int, dict[date, float]], dict[int, float]]:
+        statement = (
+            select(
+                SkuForecast.product_id,
+                Product.sku,
+                Product.name,
+                SkuForecast.forecast_date,
+                SkuForecast.predicted_units,
+            )
+            .join(Product, Product.id == SkuForecast.product_id)
+            .where(SkuForecast.run_id == run_id)
+            .order_by(SkuForecast.product_id.asc(), SkuForecast.forecast_date.asc())
+        )
+        rows = self.db.execute(statement).all()
+
+        product_meta: dict[int, dict[str, object]] = {}
+        forecast_by_product: dict[int, dict[date, float]] = {}
+        totals_by_product: dict[int, float] = {}
+        for row in rows:
+            product_meta[row.product_id] = {
+                "sku": row.sku,
+                "name": row.name,
+            }
+            product_forecasts = forecast_by_product.setdefault(row.product_id, {})
+            product_forecasts[row.forecast_date] = float(row.predicted_units or 0.0)
+            totals_by_product[row.product_id] = totals_by_product.get(row.product_id, 0.0) + float(row.predicted_units or 0.0)
+
+        return product_meta, forecast_by_product, totals_by_product
+
+    def _load_run_recommendations(self, run_id: int) -> dict[int, ReorderRecommendation]:
+        rows = self.db.scalars(select(ReorderRecommendation).where(ReorderRecommendation.run_id == run_id)).all()
+        return {row.product_id: row for row in rows}
+
+    def _load_actual_units_lookup(
+        self,
+        *,
+        product_ids: list[int],
+        start_date: date,
+        end_date: date,
+    ) -> dict[tuple[int, date], float]:
+        if not product_ids or start_date > end_date:
+            return {}
+
+        statement = (
+            select(
+                SalesItem.product_id,
+                func.date(SalesTransaction.sold_at).label("sale_date"),
+                func.sum(SalesItem.qty).label("units"),
+            )
+            .join(SalesTransaction, SalesItem.sales_transaction_id == SalesTransaction.id)
+            .where(SalesItem.product_id.in_(product_ids))
+            .where(func.date(SalesTransaction.sold_at) >= start_date)
+            .where(func.date(SalesTransaction.sold_at) <= end_date)
+            .group_by(SalesItem.product_id, "sale_date")
+        )
+        rows = self.db.execute(statement).all()
+
+        actuals: dict[tuple[int, date], float] = {}
+        for row in rows:
+            sale_date = row.sale_date if isinstance(row.sale_date, date) else date.fromisoformat(str(row.sale_date))
+            actuals[(int(row.product_id), sale_date)] = float(row.units or 0.0)
+        return actuals
+
+    def _build_run_comparison_metrics(
+        self,
+        *,
+        actual: list[float],
+        predicted: list[float],
+        recommendations: dict[int, ReorderRecommendation],
+        product_ids: list[int],
+    ) -> ForecastRunComparisonMetrics:
+        if actual:
+            mae, mape_pct = self._error_metrics(actual, predicted)
+            wmape_pct = self._weighted_mape_pct(actual, predicted)
+        else:
+            mae = None
+            mape_pct = None
+            wmape_pct = None
+
+        confidences = [
+            float(recommendations[product_id].confidence_score)
+            for product_id in product_ids
+            if product_id in recommendations and recommendations[product_id].confidence_score is not None
+        ]
+        rows = [recommendations[product_id] for product_id in product_ids if product_id in recommendations]
+        return ForecastRunComparisonMetrics(
+            mae=mae,
+            mape_pct=mape_pct,
+            wmape_pct=wmape_pct,
+            avg_confidence=float(mean(confidences)) if confidences else None,
+            stockout_within_horizon_count=sum(1 for row in rows if row.predicted_stockout_date is not None),
+            reorder_required_count=sum(1 for row in rows if int(row.suggested_qty or 0) > 0),
+            total_suggested_reorder_qty=sum(int(row.suggested_qty or 0) for row in rows),
+        )
+
+    @staticmethod
+    def _comparison_verdict(
+        *,
+        comparable_points: int,
+        baseline: ForecastRunComparisonMetrics,
+        candidate: ForecastRunComparisonMetrics,
+    ) -> str:
+        if comparable_points <= 0 or baseline.wmape_pct is None or candidate.wmape_pct is None:
+            return "insufficient_actuals"
+
+        wmape_delta = candidate.wmape_pct - baseline.wmape_pct
+        mae_delta = (
+            None
+            if baseline.mae is None or candidate.mae is None
+            else candidate.mae - baseline.mae
+        )
+        confidence_delta = (
+            None
+            if baseline.avg_confidence is None or candidate.avg_confidence is None
+            else candidate.avg_confidence - baseline.avg_confidence
+        )
+
+        if wmape_delta < -0.1 and (mae_delta is None or mae_delta <= 0.0) and (confidence_delta is None or confidence_delta >= 0.0):
+            return "improved"
+        if wmape_delta > 0.1 and (mae_delta is None or mae_delta >= 0.0) and (confidence_delta is None or confidence_delta <= 0.0):
+            return "degraded"
+        return "mixed"
+
+    @staticmethod
+    def _validation_row_float(row: dict[str, object] | None, key: str, *, fallback_key: str | None = None) -> float | None:
+        if row is None:
+            return None
+        value = row.get(key)
+        if value is None and fallback_key is not None:
+            value = row.get(fallback_key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _validation_raw_candidate_wmape(cls, row: dict[str, object] | None) -> float | None:
+        return cls._validation_row_float(
+            row,
+            "candidate_model_wmape_pct",
+            fallback_key="model_wmape_pct",
+        )
+
+    @staticmethod
+    def _validation_candidate_model_name(row: dict[str, object] | None) -> str | None:
+        if row is None:
+            return None
+        candidate_model_name = str(row.get("candidate_model_name") or "").strip()
+        if candidate_model_name:
+            return candidate_model_name
+        selected_model_name = str(row.get("model_name") or "").strip()
+        return selected_model_name or None
+
+    @staticmethod
+    def _validation_fallback_reason(
+        row: dict[str, object] | None,
+        fallback_map: dict[str, str],
+    ) -> str | None:
+        if row is None:
+            return None
+        row_reason = str(row.get("fallback_reason") or "").strip()
+        if row_reason:
+            return row_reason
+        sku = str(row.get("sku") or "").strip()
+        return fallback_map.get(sku) or None
+
+    @staticmethod
+    def _validation_selected_strategy_action(
+        row: dict[str, object] | None,
+        *,
+        fallback_reason: str | None,
+    ) -> str | None:
+        if row is None:
+            return None
+        action = str(row.get("selected_strategy_action") or "").strip()
+        if action:
+            return action
+        selected_model_name = str(row.get("model_name") or "").strip()
+        if selected_model_name == "BaselineFallback" or fallback_reason:
+            return "baseline_fallback"
+        return "none"
+
+    @classmethod
+    def _build_validation_snapshot(
+        cls,
+        summary: dict[str, object],
+        rows: list[dict[str, object]],
+        *,
+        fallback_map: dict[str, str],
+    ) -> ForecastRunValidationSnapshot | None:
+        enriched_summary = dict(summary)
+
+        evaluated_rows = [
+            row
+            for row in rows
+            if cls._validation_row_float(row, "model_wmape_pct") is not None
+            and cls._validation_row_float(row, "baseline_wmape_pct") is not None
+        ]
+        raw_candidate_rows = [
+            row
+            for row in rows
+            if cls._validation_raw_candidate_wmape(row) is not None
+            and cls._validation_row_float(row, "baseline_wmape_pct") is not None
+        ]
+        raw_candidate_wmapes = [
+            value
+            for row in raw_candidate_rows
+            if (value := cls._validation_raw_candidate_wmape(row)) is not None
+        ]
+        raw_candidate_baselines = [
+            value
+            for row in raw_candidate_rows
+            if (value := cls._validation_row_float(row, "baseline_wmape_pct")) is not None
+        ]
+
+        fallback_count = 0
+        mature_evaluated_skus = 0
+        mature_raw_candidate_win_count = 0
+        for row in rows:
+            fallback_reason = cls._validation_fallback_reason(row, fallback_map)
+            action = cls._validation_selected_strategy_action(row, fallback_reason=fallback_reason)
+            if action == "baseline_fallback":
+                fallback_count += 1
+
+            data_tier = str(row.get("data_tier") or "").strip()
+            raw_candidate_wmape = cls._validation_raw_candidate_wmape(row)
+            baseline_wmape = cls._validation_row_float(row, "baseline_wmape_pct")
+            if data_tier == "mature" and raw_candidate_wmape is not None and baseline_wmape is not None:
+                mature_evaluated_skus += 1
+                if raw_candidate_wmape <= baseline_wmape:
+                    mature_raw_candidate_win_count += 1
+
+        evaluated_skus = int(enriched_summary.get("evaluated_skus") or len(evaluated_rows))
+        skipped_skus = int(enriched_summary.get("skipped_skus") or max(0, len(rows) - evaluated_skus))
+        enriched_summary.setdefault("method", "lead_time_backtest")
+        enriched_summary["evaluated_skus"] = evaluated_skus
+        enriched_summary["skipped_skus"] = skipped_skus
+        enriched_summary["raw_candidate_wmape_pct"] = cls._average_or_none(raw_candidate_wmapes)
+        enriched_summary["raw_candidate_wmape_improvement_pct"] = cls._improvement_pct(
+            cls._average_or_none(raw_candidate_wmapes),
+            cls._average_or_none(raw_candidate_baselines),
+        )
+        enriched_summary["selected_strategy_fallback_count"] = fallback_count
+        enriched_summary["selected_strategy_fallback_rate_pct"] = (
+            None
+            if evaluated_skus <= 0
+            else float(fallback_count / evaluated_skus) * 100.0
+        )
+        enriched_summary["mature_evaluated_skus"] = mature_evaluated_skus
+        enriched_summary["mature_raw_candidate_win_count"] = mature_raw_candidate_win_count
+        enriched_summary["mature_raw_candidate_win_rate_pct"] = (
+            None
+            if mature_evaluated_skus <= 0
+            else float(mature_raw_candidate_win_count / mature_evaluated_skus) * 100.0
+        )
+
+        try:
+            return ForecastRunValidationSnapshot.model_validate(enriched_summary)
+        except Exception:
+            return None
+
+    def _load_run_validation_report(
+        self,
+        run: ForecastRun,
+    ) -> tuple[ForecastRunValidationSnapshot | None, list[dict[str, object]]]:
+        report_name = self._parse_run_note_value(run.notes, "validation_report")
+        if report_name is None:
+            return None, []
+
+        report_path = Path(__file__).resolve().parents[2] / "data" / report_name
+        if not report_path.exists():
+            return None, []
+
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None, []
+
+        summary = payload.get("summary")
+        rows_payload = payload.get("rows")
+        rows = [row for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+        if not isinstance(summary, dict):
+            summary = {}
+
+        fallback_map = self._parse_run_note_map(run.notes, "fallback")
+        return self._build_validation_snapshot(summary, rows, fallback_map=fallback_map), rows
+
+    @staticmethod
+    def _validation_comparison_verdict(
+        baseline: ForecastRunValidationSnapshot | None,
+        candidate: ForecastRunValidationSnapshot | None,
+    ) -> str:
+        if baseline is None or candidate is None:
+            return "unavailable"
+        if baseline.model_wmape_pct is None or candidate.model_wmape_pct is None:
+            return "unavailable"
+
+        wmape_delta = candidate.model_wmape_pct - baseline.model_wmape_pct
+        improvement_delta = (
+            None
+            if baseline.wmape_improvement_pct is None or candidate.wmape_improvement_pct is None
+            else candidate.wmape_improvement_pct - baseline.wmape_improvement_pct
+        )
+
+        if wmape_delta < -0.1 and (improvement_delta is None or improvement_delta >= 0.1):
+            return "improved"
+        if wmape_delta > 0.1 and (improvement_delta is None or improvement_delta <= -0.1):
+            return "degraded"
+        return "mixed"
+
+    @staticmethod
+    def _build_validation_delta(
+        baseline: ForecastRunValidationSnapshot | None,
+        candidate: ForecastRunValidationSnapshot | None,
+    ) -> ForecastRunValidationDelta | None:
+        if baseline is None or candidate is None:
+            return None
+        return ForecastRunValidationDelta(
+            evaluated_skus=candidate.evaluated_skus - baseline.evaluated_skus,
+            skipped_skus=candidate.skipped_skus - baseline.skipped_skus,
+            model_wmape_pct=(
+                None
+                if baseline.model_wmape_pct is None or candidate.model_wmape_pct is None
+                else candidate.model_wmape_pct - baseline.model_wmape_pct
+            ),
+            baseline_wmape_pct=(
+                None
+                if baseline.baseline_wmape_pct is None or candidate.baseline_wmape_pct is None
+                else candidate.baseline_wmape_pct - baseline.baseline_wmape_pct
+            ),
+            wmape_improvement_pct=(
+                None
+                if baseline.wmape_improvement_pct is None or candidate.wmape_improvement_pct is None
+                else candidate.wmape_improvement_pct - baseline.wmape_improvement_pct
+            ),
+            raw_candidate_wmape_pct=(
+                None
+                if baseline.raw_candidate_wmape_pct is None or candidate.raw_candidate_wmape_pct is None
+                else candidate.raw_candidate_wmape_pct - baseline.raw_candidate_wmape_pct
+            ),
+            raw_candidate_wmape_improvement_pct=(
+                None
+                if baseline.raw_candidate_wmape_improvement_pct is None
+                or candidate.raw_candidate_wmape_improvement_pct is None
+                else candidate.raw_candidate_wmape_improvement_pct - baseline.raw_candidate_wmape_improvement_pct
+            ),
+            total_windows_evaluated=candidate.total_windows_evaluated - baseline.total_windows_evaluated,
+            model_win_count=candidate.model_win_count - baseline.model_win_count,
+            model_win_rate_pct=(
+                None
+                if baseline.model_win_rate_pct is None or candidate.model_win_rate_pct is None
+                else candidate.model_win_rate_pct - baseline.model_win_rate_pct
+            ),
+            selected_strategy_fallback_count=(
+                candidate.selected_strategy_fallback_count - baseline.selected_strategy_fallback_count
+            ),
+            selected_strategy_fallback_rate_pct=(
+                None
+                if baseline.selected_strategy_fallback_rate_pct is None
+                or candidate.selected_strategy_fallback_rate_pct is None
+                else candidate.selected_strategy_fallback_rate_pct - baseline.selected_strategy_fallback_rate_pct
+            ),
+            mature_evaluated_skus=candidate.mature_evaluated_skus - baseline.mature_evaluated_skus,
+            mature_raw_candidate_win_count=(
+                candidate.mature_raw_candidate_win_count - baseline.mature_raw_candidate_win_count
+            ),
+            mature_raw_candidate_win_rate_pct=(
+                None
+                if baseline.mature_raw_candidate_win_rate_pct is None
+                or candidate.mature_raw_candidate_win_rate_pct is None
+                else candidate.mature_raw_candidate_win_rate_pct - baseline.mature_raw_candidate_win_rate_pct
+            ),
+        )
+
+    def _build_validation_sku_rows(
+        self,
+        *,
+        baseline_run: ForecastRun,
+        candidate_run: ForecastRun,
+        baseline_rows: list[dict[str, object]],
+        candidate_rows: list[dict[str, object]],
+    ) -> list[ForecastRunValidationSkuRow]:
+        baseline_by_sku = {
+            str(row.get("sku")).strip(): row
+            for row in baseline_rows
+            if str(row.get("sku") or "").strip()
+        }
+        candidate_by_sku = {
+            str(row.get("sku")).strip(): row
+            for row in candidate_rows
+            if str(row.get("sku") or "").strip()
+        }
+        if not baseline_by_sku and not candidate_by_sku:
+            return []
+
+        baseline_fallback_map = self._parse_run_note_map(baseline_run.notes, "fallback")
+        candidate_fallback_map = self._parse_run_note_map(candidate_run.notes, "fallback")
+
+        rows: list[ForecastRunValidationSkuRow] = []
+        for sku in sorted(set(baseline_by_sku).union(candidate_by_sku)):
+            baseline_row = baseline_by_sku.get(sku)
+            candidate_row = candidate_by_sku.get(sku)
+            product_id_value: int | None = None
+            product_source = candidate_row or baseline_row
+            if product_source is not None:
+                try:
+                    raw_product_id = product_source.get("product_id")
+                    product_id_value = None if raw_product_id is None else int(raw_product_id)
+                except (TypeError, ValueError):
+                    product_id_value = None
+
+            baseline_fallback_reason = self._validation_fallback_reason(baseline_row, baseline_fallback_map)
+            candidate_fallback_reason = self._validation_fallback_reason(candidate_row, candidate_fallback_map)
+
+            baseline_selected_wmape = self._validation_row_float(baseline_row, "model_wmape_pct")
+            candidate_selected_wmape = self._validation_row_float(candidate_row, "model_wmape_pct")
+            baseline_raw_candidate_wmape = self._validation_raw_candidate_wmape(baseline_row)
+            candidate_raw_candidate_wmape = self._validation_raw_candidate_wmape(candidate_row)
+            baseline_baseline_wmape = self._validation_row_float(baseline_row, "baseline_wmape_pct")
+            candidate_baseline_wmape = self._validation_row_float(candidate_row, "baseline_wmape_pct")
+
+            baseline_raw_gap = self._float_delta(baseline_raw_candidate_wmape, baseline_baseline_wmape)
+            candidate_raw_gap = self._float_delta(candidate_raw_candidate_wmape, candidate_baseline_wmape)
+
+            rows.append(
+                ForecastRunValidationSkuRow(
+                    product_id=product_id_value,
+                    sku=sku,
+                    baseline_data_tier=str(baseline_row.get("data_tier") or "").strip() or None
+                    if baseline_row is not None
+                    else None,
+                    candidate_data_tier=str(candidate_row.get("data_tier") or "").strip() or None
+                    if candidate_row is not None
+                    else None,
+                    baseline_quality_status=str(baseline_row.get("quality_status") or "").strip() or None
+                    if baseline_row is not None
+                    else None,
+                    candidate_quality_status=str(candidate_row.get("quality_status") or "").strip() or None
+                    if candidate_row is not None
+                    else None,
+                    baseline_selected_strategy_action=self._validation_selected_strategy_action(
+                        baseline_row,
+                        fallback_reason=baseline_fallback_reason,
+                    ),
+                    candidate_selected_strategy_action=self._validation_selected_strategy_action(
+                        candidate_row,
+                        fallback_reason=candidate_fallback_reason,
+                    ),
+                    baseline_fallback_reason=baseline_fallback_reason,
+                    candidate_fallback_reason=candidate_fallback_reason,
+                    baseline_selected_model_name=str(baseline_row.get("model_name") or "").strip() or None
+                    if baseline_row is not None
+                    else None,
+                    candidate_selected_model_name=str(candidate_row.get("model_name") or "").strip() or None
+                    if candidate_row is not None
+                    else None,
+                    baseline_raw_candidate_model_name=self._validation_candidate_model_name(baseline_row),
+                    candidate_raw_candidate_model_name=self._validation_candidate_model_name(candidate_row),
+                    baseline_selected_wmape_pct=baseline_selected_wmape,
+                    candidate_selected_wmape_pct=candidate_selected_wmape,
+                    selected_wmape_delta=self._float_delta(candidate_selected_wmape, baseline_selected_wmape),
+                    baseline_raw_candidate_wmape_pct=baseline_raw_candidate_wmape,
+                    candidate_raw_candidate_wmape_pct=candidate_raw_candidate_wmape,
+                    raw_candidate_wmape_delta=self._float_delta(
+                        candidate_raw_candidate_wmape,
+                        baseline_raw_candidate_wmape,
+                    ),
+                    baseline_baseline_wmape_pct=baseline_baseline_wmape,
+                    candidate_baseline_wmape_pct=candidate_baseline_wmape,
+                    baseline_raw_candidate_gap_vs_baseline_pct=baseline_raw_gap,
+                    candidate_raw_candidate_gap_vs_baseline_pct=candidate_raw_gap,
+                    raw_candidate_gap_vs_baseline_delta=self._float_delta(candidate_raw_gap, baseline_raw_gap),
+                )
+            )
+
+        rows.sort(
+            key=lambda row: (
+                0 if (row.candidate_data_tier or row.baseline_data_tier) == "mature" else 1,
+                0 if row.candidate_selected_strategy_action == "baseline_fallback" else 1,
+                -(
+                    row.candidate_raw_candidate_gap_vs_baseline_pct
+                    if row.candidate_raw_candidate_gap_vs_baseline_pct is not None
+                    else -1_000_000.0
+                ),
+                row.sku,
+            )
+        )
+        return rows
+
+    def get_forecast_report_comparison(
+        self,
+        *,
+        baseline_run_id: int | None = None,
+        candidate_run_id: int | None = None,
+    ) -> ForecastRunComparisonResponse:
+        baseline_run, candidate_run = self._resolve_forecast_run_pair(
+            baseline_run_id=baseline_run_id,
+            candidate_run_id=candidate_run_id,
+        )
+
+        baseline_meta, baseline_forecasts, baseline_totals = self._load_run_forecast_values(baseline_run.id)
+        candidate_meta, candidate_forecasts, candidate_totals = self._load_run_forecast_values(candidate_run.id)
+        baseline_recommendations = self._load_run_recommendations(baseline_run.id)
+        candidate_recommendations = self._load_run_recommendations(candidate_run.id)
+
+        shared_product_ids = sorted(set(baseline_forecasts).intersection(candidate_forecasts))
+        comparable_dates: list[date] = []
+        actual_product_ids: list[int] = []
+        today = date.today()
+
+        for product_id in shared_product_ids:
+            shared_dates = sorted(set(baseline_forecasts[product_id]).intersection(candidate_forecasts[product_id]))
+            realized_dates = [forecast_date for forecast_date in shared_dates if forecast_date <= today]
+            if realized_dates:
+                actual_product_ids.append(product_id)
+                comparable_dates.extend(realized_dates)
+
+        actuals_lookup: dict[tuple[int, date], float] = {}
+        if comparable_dates and actual_product_ids:
+            actuals_lookup = self._load_actual_units_lookup(
+                product_ids=sorted(set(actual_product_ids)),
+                start_date=min(comparable_dates),
+                end_date=max(comparable_dates),
+            )
+
+        baseline_actual: list[float] = []
+        baseline_predicted: list[float] = []
+        candidate_predicted: list[float] = []
+        comparable_sku_ids: list[int] = []
+
+        for product_id in shared_product_ids:
+            shared_dates = sorted(set(baseline_forecasts[product_id]).intersection(candidate_forecasts[product_id]))
+            realized_dates = [forecast_date for forecast_date in shared_dates if forecast_date <= today]
+            if not realized_dates:
+                continue
+            comparable_sku_ids.append(product_id)
+            for forecast_date in realized_dates:
+                baseline_actual.append(float(actuals_lookup.get((product_id, forecast_date), 0.0)))
+                baseline_predicted.append(float(baseline_forecasts[product_id][forecast_date]))
+                candidate_predicted.append(float(candidate_forecasts[product_id][forecast_date]))
+
+        baseline_metrics = self._build_run_comparison_metrics(
+            actual=baseline_actual,
+            predicted=baseline_predicted,
+            recommendations=baseline_recommendations,
+            product_ids=shared_product_ids,
+        )
+        candidate_metrics = self._build_run_comparison_metrics(
+            actual=baseline_actual,
+            predicted=candidate_predicted,
+            recommendations=candidate_recommendations,
+            product_ids=shared_product_ids,
+        )
+
+        sku_rows: list[ForecastRunComparisonSkuRow] = []
+        for product_id in shared_product_ids:
+            meta = candidate_meta.get(product_id) or baseline_meta.get(product_id) or {}
+            baseline_recommendation = baseline_recommendations.get(product_id)
+            candidate_recommendation = candidate_recommendations.get(product_id)
+            baseline_confidence = (
+                float(baseline_recommendation.confidence_score)
+                if baseline_recommendation is not None and baseline_recommendation.confidence_score is not None
+                else None
+            )
+            candidate_confidence = (
+                float(candidate_recommendation.confidence_score)
+                if candidate_recommendation is not None and candidate_recommendation.confidence_score is not None
+                else None
+            )
+            baseline_suggested_qty = int(baseline_recommendation.suggested_qty) if baseline_recommendation is not None else 0
+            candidate_suggested_qty = int(candidate_recommendation.suggested_qty) if candidate_recommendation is not None else 0
+            baseline_total = baseline_totals.get(product_id)
+            candidate_total = candidate_totals.get(product_id)
+            sku_rows.append(
+                ForecastRunComparisonSkuRow(
+                    product_id=product_id,
+                    sku=str(meta.get("sku") or f"product-{product_id}"),
+                    name=str(meta.get("name") or ""),
+                    baseline_predicted_units_total=baseline_total,
+                    candidate_predicted_units_total=candidate_total,
+                    predicted_units_total_delta=(
+                        None
+                        if baseline_total is None or candidate_total is None
+                        else float(candidate_total - baseline_total)
+                    ),
+                    baseline_suggested_qty=baseline_suggested_qty,
+                    candidate_suggested_qty=candidate_suggested_qty,
+                    suggested_qty_delta=candidate_suggested_qty - baseline_suggested_qty,
+                    baseline_confidence_score=baseline_confidence,
+                    candidate_confidence_score=candidate_confidence,
+                    confidence_score_delta=self._float_delta(candidate_confidence, baseline_confidence),
+                    baseline_predicted_stockout_date=(
+                        baseline_recommendation.predicted_stockout_date if baseline_recommendation is not None else None
+                    ),
+                    candidate_predicted_stockout_date=(
+                        candidate_recommendation.predicted_stockout_date if candidate_recommendation is not None else None
+                    ),
+                )
+            )
+
+        sku_rows.sort(key=lambda row: (abs(row.suggested_qty_delta), abs(row.confidence_score_delta or 0.0)), reverse=True)
+
+        metrics_window = ForecastRunComparisonWindow(
+            comparable_skus=len(comparable_sku_ids),
+            comparable_points=len(baseline_actual),
+            actuals_start=min(comparable_dates) if comparable_dates else None,
+            actuals_end=max(comparable_dates) if comparable_dates else None,
+        )
+        verdict = self._comparison_verdict(
+            comparable_points=metrics_window.comparable_points,
+            baseline=baseline_metrics,
+            candidate=candidate_metrics,
+        )
+        baseline_validation, baseline_validation_rows = self._load_run_validation_report(baseline_run)
+        candidate_validation, candidate_validation_rows = self._load_run_validation_report(candidate_run)
+        validation = None
+        if baseline_validation is not None or candidate_validation is not None:
+            validation = ForecastRunValidationComparison(
+                verdict=self._validation_comparison_verdict(baseline_validation, candidate_validation),
+                baseline=baseline_validation,
+                candidate=candidate_validation,
+                delta=self._build_validation_delta(baseline_validation, candidate_validation),
+            )
+        validation_sku_rows = self._build_validation_sku_rows(
+            baseline_run=baseline_run,
+            candidate_run=candidate_run,
+            baseline_rows=baseline_validation_rows,
+            candidate_rows=candidate_validation_rows,
+        )
+
+        return ForecastRunComparisonResponse(
+            baseline_run=ForecastRunComparisonRun(
+                run_id=baseline_run.id,
+                run_at=baseline_run.run_at,
+                horizon_days=baseline_run.horizon_days,
+                model_version=baseline_run.model_version or "n/a",
+            ),
+            candidate_run=ForecastRunComparisonRun(
+                run_id=candidate_run.id,
+                run_at=candidate_run.run_at,
+                horizon_days=candidate_run.horizon_days,
+                model_version=candidate_run.model_version or "n/a",
+            ),
+            verdict=verdict,
+            metrics=metrics_window,
+            baseline=baseline_metrics,
+            candidate=candidate_metrics,
+            delta=ForecastRunComparisonDelta(
+                mae=self._float_delta(candidate_metrics.mae, baseline_metrics.mae),
+                mape_pct=self._float_delta(candidate_metrics.mape_pct, baseline_metrics.mape_pct),
+                wmape_pct=self._float_delta(candidate_metrics.wmape_pct, baseline_metrics.wmape_pct),
+                avg_confidence=self._float_delta(candidate_metrics.avg_confidence, baseline_metrics.avg_confidence),
+                stockout_within_horizon_count=(
+                    candidate_metrics.stockout_within_horizon_count - baseline_metrics.stockout_within_horizon_count
+                ),
+                reorder_required_count=candidate_metrics.reorder_required_count - baseline_metrics.reorder_required_count,
+                total_suggested_reorder_qty=(
+                    candidate_metrics.total_suggested_reorder_qty - baseline_metrics.total_suggested_reorder_qty
+                ),
+            ),
+            validation=validation,
+            validation_sku_rows=validation_sku_rows,
+            sku_rows=sku_rows,
+        )
 
     def get_forecast_report(
         self,

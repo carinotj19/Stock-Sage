@@ -23,6 +23,13 @@ MIN_NON_ZERO_RATIO = 0.08
 SUSPECTED_STOCKOUT_ZERO_RUN_DAYS = 5
 RESTOCK_GUIDED_STOCKOUT_ZERO_RUN_DAYS = 3
 STOCKOUT_RESTOCK_LOOKAHEAD_DAYS = 1
+TERMINAL_STOCKOUT_MIN_HISTORY_DAYS = 28
+TERMINAL_STOCKOUT_RECENT_WINDOW_DAYS = 14
+TERMINAL_STOCKOUT_BROAD_WINDOW_DAYS = 28
+TERMINAL_STOCKOUT_MIN_RECENT_NON_ZERO_DAYS = 4
+TERMINAL_STOCKOUT_MIN_RECENT_NON_ZERO_RATIO = 0.25
+TERMINAL_STOCKOUT_MIN_BROAD_NON_ZERO_DAYS = 6
+TERMINAL_STOCKOUT_MIN_BROAD_NON_ZERO_RATIO = 0.20
 MATURE_HISTORY_DAYS = max(MIN_HISTORY_DAYS * 2, 42)
 MATURE_NON_ZERO_DAYS = max(MIN_NON_ZERO_DAYS * 2, 12)
 MATURE_NON_ZERO_RATIO = max(MIN_NON_ZERO_RATIO * 2.0, 0.18)
@@ -238,6 +245,35 @@ def _restock_signal_by_day(stock_movements: pd.DataFrame | None) -> pd.Series:
     return signal.astype(float)
 
 
+def _is_terminal_stockout_candidate(series: pd.Series, run_start: int, run_end: int) -> bool:
+    if run_end != len(series) - 1 or run_start < TERMINAL_STOCKOUT_MIN_HISTORY_DAYS:
+        return False
+
+    recent_window = series.iloc[max(0, run_start - TERMINAL_STOCKOUT_RECENT_WINDOW_DAYS):run_start]
+    if recent_window.empty:
+        return False
+    recent_non_zero_days = int((recent_window > 0.0).sum())
+    recent_non_zero_ratio = float(recent_non_zero_days / len(recent_window))
+    if (
+        recent_non_zero_days < TERMINAL_STOCKOUT_MIN_RECENT_NON_ZERO_DAYS
+        or recent_non_zero_ratio < TERMINAL_STOCKOUT_MIN_RECENT_NON_ZERO_RATIO
+    ):
+        return False
+
+    broad_window = series.iloc[max(0, run_start - TERMINAL_STOCKOUT_BROAD_WINDOW_DAYS):run_start]
+    if broad_window.empty:
+        return False
+    broad_non_zero_days = int((broad_window > 0.0).sum())
+    broad_non_zero_ratio = float(broad_non_zero_days / len(broad_window))
+    if (
+        broad_non_zero_days < TERMINAL_STOCKOUT_MIN_BROAD_NON_ZERO_DAYS
+        or broad_non_zero_ratio < TERMINAL_STOCKOUT_MIN_BROAD_NON_ZERO_RATIO
+    ):
+        return False
+
+    return True
+
+
 def _identify_suspected_stockout_runs(
     series: pd.Series,
     stock_movements: pd.DataFrame | None = None,
@@ -260,8 +296,11 @@ def _identify_suspected_stockout_runs(
         right = values.iloc[run_end + 1:min(len(values), run_end + 15)]
         left_non_zero = left[left > 0.0]
         right_non_zero = right[right > 0.0]
-        # Only flag zero-demand runs that are surrounded by non-zero demand windows.
-        if left_non_zero.empty or right_non_zero.empty:
+        terminal_candidate = _is_terminal_stockout_candidate(values, run_start, run_end)
+        # Only flag zero-demand runs that are surrounded by non-zero demand windows,
+        # or a terminal zero-demand run with strong recent demand that likely reflects
+        # stockout-censored sales at the end of the available history.
+        if left_non_zero.empty or (right_non_zero.empty and not terminal_candidate):
             run_start = None
             return
 

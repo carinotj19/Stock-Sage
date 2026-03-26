@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import json
+from pathlib import Path
+import pandas as pd
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,11 +19,14 @@ from app.db.models import (
 )
 from app.jobs.run_forecast_daily import (
     _apply_champion_lock_guardrail,
+    _baseline_forecast_frame,
     _calibrate_confidence,
+    _lead_time_operational_backtest,
     _parse_reason_tokens,
     _recommendation_action,
     _recommendation_fallback_reason,
     _recommendation_gate_reason,
+    _sales_recency_days,
     run_daily_forecast,
 )
 from app.ml.model_registry import CandidateScore
@@ -34,9 +40,9 @@ def _build_test_engine():
     return create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 
 
-def _seed_sales_history(db: Session, product_id: int) -> None:
-    base_date = datetime.now(timezone.utc) - timedelta(days=14)
-    for i in range(14):
+def _seed_sales_history(db: Session, product_id: int, *, days: int = 14) -> None:
+    base_date = datetime.now(timezone.utc) - timedelta(days=days)
+    for i in range(days):
         tx = SalesTransaction(
             receipt_no=f"R-FC-{i}",
             sold_at=base_date + timedelta(days=i),
@@ -102,6 +108,23 @@ def test_forecast_job_persists_forecasts_and_reorders() -> None:
         assert recommendation.reorder_point >= 0
         assert recommendation.suggested_qty >= 0
 
+        run = db.scalars(select(ForecastRun).where(ForecastRun.id == run_id)).first()
+        assert run is not None
+        assert run.notes is not None
+        assert "validation_report=" in run.notes
+        validation_report = next(
+            section.split("=", 1)[1]
+            for section in run.notes.split("|")
+            if section.startswith("validation_report=")
+        )
+        validation_path = Path(__file__).resolve().parents[1] / "data" / validation_report
+        assert validation_path.exists()
+        validation_payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert validation_payload["run_id"] == run_id
+        assert validation_payload["summary"]["method"] == "lead_time_backtest"
+        assert "model_wmape_pct" in validation_payload["summary"]
+        validation_path.unlink(missing_ok=True)
+
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
@@ -149,6 +172,69 @@ def test_forecast_job_gates_low_quality_recommendations() -> None:
         assert run is not None
         assert run.notes is not None
         assert "gated=" in run.notes
+
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
+def test_forecast_job_validation_snapshot_uses_selected_baseline_strategy(monkeypatch) -> None:
+    engine = _build_test_engine()
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr("app.jobs.run_forecast_daily._recommendation_action", lambda _tokens: "baseline_fallback")
+
+    with TestingSessionLocal() as db:
+        supplier = Supplier(name="Validation Snapshot Supplier", lead_time_days_default=5)
+        db.add(supplier)
+        db.flush()
+
+        product = Product(
+            sku="SKU-VAL-FALLBACK",
+            name="Validation Snapshot Item",
+            supplier_id=supplier.id,
+            cost_price=1.0,
+            sell_price=2.5,
+            reorder_min_qty=5,
+            reorder_multiple=5,
+            safety_stock=2,
+            active=True,
+        )
+        db.add(product)
+        db.flush()
+
+        db.add(InventoryBalance(product_id=product.id, on_hand_qty=40))
+        _seed_sales_history(db, product.id, days=35)
+        db.commit()
+
+        run_id = run_daily_forecast(db=db, horizon_days=10)
+        assert run_id is not None
+
+        run = db.scalars(select(ForecastRun).where(ForecastRun.id == run_id)).first()
+        assert run is not None
+        assert run.notes is not None
+        validation_report = next(
+            section.split("=", 1)[1]
+            for section in run.notes.split("|")
+            if section.startswith("validation_report=")
+        )
+        validation_path = Path(__file__).resolve().parents[1] / "data" / validation_report
+        validation_payload = json.loads(validation_path.read_text(encoding="utf-8"))
+
+        row = validation_payload["rows"][0]
+        assert row["selected_strategy_action"] == "baseline_fallback"
+        assert row["model_name"] == "BaselineFallback"
+        assert row["model_wmape_pct"] == row["baseline_wmape_pct"]
+        assert row["wmape_improvement_pct"] == 0.0
+        assert row["candidate_model_name"] != ""
+        assert row["candidate_model_wmape_pct"] is not None
+
+        summary = validation_payload["summary"]
+        assert summary["evaluated_skus"] == 1
+        assert summary["model_wmape_pct"] == summary["baseline_wmape_pct"]
+        assert summary["wmape_improvement_pct"] == 0.0
+        validation_path.unlink(missing_ok=True)
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
@@ -611,3 +697,63 @@ def test_gate_reason_adds_stale_history_and_no_recent_sales_signals() -> None:
     )
     assert stale_hard_reason is not None
     assert "no_recent_sales_30d" in stale_hard_reason
+
+
+def test_sales_recency_days_separates_history_freshness_from_last_sale() -> None:
+    today = datetime.now(timezone.utc).date()
+    history = pd.DataFrame(
+        [
+            {"date": today - timedelta(days=3), "units": 4.0},
+            {"date": today - timedelta(days=2), "units": 0.0},
+            {"date": today - timedelta(days=1), "units": 0.0},
+            {"date": today, "units": 0.0},
+        ]
+    )
+
+    history_lag_days, days_since_last_sale = _sales_recency_days(history)
+
+    assert history_lag_days == 0
+    assert days_since_last_sale == 3
+
+
+def test_baseline_forecast_frame_uses_dense_daily_history_for_sparse_sales() -> None:
+    history = pd.DataFrame(
+        [
+            {"date": datetime(2026, 1, 1), "units": 7.0},
+            {"date": datetime(2026, 1, 8), "units": 7.0},
+            {"date": datetime(2026, 1, 15), "units": 7.0},
+        ]
+    )
+    template = pd.DataFrame(
+        {
+            "forecast_date": pd.date_range("2026-01-16", periods=3, freq="D").date,
+            "predicted_units": [0.0, 0.0, 0.0],
+            "lower_ci": [0.0, 0.0, 0.0],
+            "upper_ci": [0.0, 0.0, 0.0],
+        }
+    )
+
+    baseline = _baseline_forecast_frame(history, template)
+
+    assert baseline["predicted_units"].tolist() == [1.0, 1.0, 1.0]
+
+
+def test_lead_time_backtest_does_not_score_sparse_weekly_bursts_as_perfect_baseline() -> None:
+    start = datetime(2025, 9, 1)
+    history = pd.DataFrame(
+        [
+            {"date": start + timedelta(days=7 * i), "units": 7.0}
+            for i in range(30)
+        ]
+    )
+    stock_movements = pd.DataFrame(columns=["occurred_at", "qty_delta", "movement_type"])
+
+    _, baseline_wmape, _, windows_evaluated = _lead_time_operational_backtest(
+        history,
+        stock_movements,
+        lead_time_days=7,
+    )
+
+    assert windows_evaluated > 0
+    assert baseline_wmape is not None
+    assert baseline_wmape > 0.0

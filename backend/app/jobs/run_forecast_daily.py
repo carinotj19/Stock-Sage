@@ -44,6 +44,7 @@ CHAMPION_LOCK_FALLBACK_REASON = "baseline_champion_locked"
 WMAPE_FALLBACK_REASON = "wmape_high"
 STALE_HISTORY_FALLBACK_REASON = "stale_history"
 NON_MATURE_GUARDRAIL_REASON = "non_mature_guardrail"
+BASELINE_FALLBACK_VALIDATION_MODEL_NAME = "BaselineFallback"
 BASELINE_FALLBACK_CONFIDENCE_FLOOR = 0.55
 BASELINE_FALLBACK_CONFIDENCE_CEIL = 0.68
 HIGH_CONFIDENCE_MIN = 0.70
@@ -88,10 +89,20 @@ def _load_sales_history(db: Session, product_id: int) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["date", "units"])
 
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         [{"date": row.sale_date, "units": float(row.units or 0)} for row in rows],
         columns=["date", "units"],
     )
+    frame["date"] = pd.to_datetime(frame["date"], utc=True).dt.tz_localize(None).dt.normalize()
+    grouped = frame.groupby("date", as_index=True)["units"].sum().sort_index().astype(float)
+    if grouped.empty:
+        return pd.DataFrame(columns=["date", "units"])
+
+    today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+    end_date = max(grouped.index.max(), today)
+    full_dates = pd.date_range(grouped.index.min(), end_date, freq="D")
+    dense = grouped.reindex(full_dates, fill_value=0.0).astype(float)
+    return pd.DataFrame({"date": dense.index, "units": dense.to_numpy(dtype=float)})
 
 
 def _load_stock_movements(db: Session, product_id: int) -> pd.DataFrame:
@@ -140,15 +151,28 @@ def _sales_recency_days(sales_history: pd.DataFrame) -> tuple[int | None, int | 
         return (None, None)
     frame = sales_history.copy()
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+    if "units" in frame.columns:
+        frame["units"] = pd.to_numeric(frame["units"], errors="coerce").fillna(0.0).astype(float)
+    else:
+        frame["units"] = 0.0
     if frame.empty:
         return (None, None)
-    last_sale_ts = frame["date"].max()
-    if pd.isna(last_sale_ts):
+
+    last_history_ts = frame["date"].max()
+    if pd.isna(last_history_ts):
         return (None, None)
+
     today = pd.Timestamp.utcnow().date()
+    last_history_date = pd.Timestamp(last_history_ts).date()
+    history_lag_days = int((today - last_history_date).days)
+
+    last_sale_ts = frame.loc[frame["units"] > 0.0, "date"].max()
+    if pd.isna(last_sale_ts):
+        return (history_lag_days, None)
+
     last_sale_date = pd.Timestamp(last_sale_ts).date()
-    lag_days = int((today - last_sale_date).days)
-    return (lag_days, lag_days)
+    days_since_last_sale = int((today - last_sale_date).days)
+    return (history_lag_days, days_since_last_sale)
 
 
 def _trailing_30_non_zero_days(sales_history: pd.DataFrame) -> int:
@@ -306,6 +330,105 @@ def _write_data_quality_report(run_id: int, payload: dict[str, object]) -> Path:
     data_dir = Path(__file__).resolve().parents[2] / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / f"forecast_data_quality_run{run_id}.json"
+    report_payload = {"run_id": run_id, **payload}
+    path.write_text(json.dumps(report_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _improvement_pct(model_value: float | None, baseline_value: float | None) -> float | None:
+    if model_value is None or baseline_value is None:
+        return None
+    denominator = abs(float(baseline_value))
+    if denominator <= 0:
+        return None
+    return ((float(baseline_value) - float(model_value)) / denominator) * 100.0
+
+
+def _build_validation_report_payload(run_id: int, rows: list[dict[str, object]]) -> dict[str, object]:
+    evaluated_rows = [
+        row
+        for row in rows
+        if row.get("model_wmape_pct") is not None and row.get("baseline_wmape_pct") is not None
+    ]
+    model_wmapes = [float(row["model_wmape_pct"]) for row in evaluated_rows]
+    baseline_wmapes = [float(row["baseline_wmape_pct"]) for row in evaluated_rows]
+    total_windows_evaluated = sum(int(row.get("windows_evaluated", 0) or 0) for row in evaluated_rows)
+    model_win_count = sum(int(row.get("model_win_count", 0) or 0) for row in evaluated_rows)
+    model_win_rate_pct = (
+        float(model_win_count / total_windows_evaluated) * 100.0
+        if total_windows_evaluated > 0
+        else None
+    )
+    model_wmape_pct = float(np.mean(model_wmapes)) if model_wmapes else None
+    baseline_wmape_pct = float(np.mean(baseline_wmapes)) if baseline_wmapes else None
+
+    return {
+        "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "summary": {
+            "method": "lead_time_backtest",
+            "evaluated_skus": len(evaluated_rows),
+            "skipped_skus": max(0, len(rows) - len(evaluated_rows)),
+            "model_wmape_pct": model_wmape_pct,
+            "baseline_wmape_pct": baseline_wmape_pct,
+            "wmape_improvement_pct": _improvement_pct(model_wmape_pct, baseline_wmape_pct),
+            "total_windows_evaluated": total_windows_evaluated,
+            "model_win_count": model_win_count,
+            "model_win_rate_pct": model_win_rate_pct,
+        },
+        "rows": rows,
+    }
+
+
+def _build_validation_row(
+    *,
+    product_id: int,
+    sku: str,
+    candidate_model_name: str,
+    quality: ForecastDataQuality,
+    lead_time_wmape: float | None,
+    lead_time_baseline_wmape: float | None,
+    lead_time_model_win_count: int | None,
+    lead_time_windows_evaluated: int | None,
+    confidence_score: float,
+    action: str,
+) -> dict[str, object]:
+    selected_model_name = candidate_model_name
+    selected_wmape = lead_time_wmape
+    if action == "baseline_fallback" and lead_time_baseline_wmape is not None:
+        selected_model_name = BASELINE_FALLBACK_VALIDATION_MODEL_NAME
+        selected_wmape = lead_time_baseline_wmape
+
+    windows_evaluated = int(lead_time_windows_evaluated or 0)
+    model_win_count = int(lead_time_model_win_count or 0)
+
+    return {
+        "product_id": int(product_id),
+        "sku": sku,
+        "model_name": selected_model_name,
+        "candidate_model_name": candidate_model_name,
+        "selected_strategy_action": action,
+        "data_tier": quality.data_tier,
+        "quality_status": quality.status,
+        "model_wmape_pct": selected_wmape,
+        "candidate_model_wmape_pct": lead_time_wmape,
+        "baseline_wmape_pct": lead_time_baseline_wmape,
+        "wmape_improvement_pct": _improvement_pct(selected_wmape, lead_time_baseline_wmape),
+        "candidate_wmape_improvement_pct": _improvement_pct(lead_time_wmape, lead_time_baseline_wmape),
+        "windows_evaluated": windows_evaluated,
+        "model_win_count": model_win_count,
+        "model_win_rate_pct": (
+            None
+            if windows_evaluated <= 0
+            else float(model_win_count / windows_evaluated) * 100.0
+        ),
+        "confidence_score": float(confidence_score),
+    }
+
+
+def _write_validation_report(run_id: int, payload: dict[str, object]) -> Path:
+    data_dir = Path(__file__).resolve().parents[2] / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / f"forecast_validation_run{run_id}.json"
     report_payload = {"run_id": run_id, **payload}
     path.write_text(json.dumps(report_payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -494,9 +617,16 @@ def _lead_time_operational_backtest(
     if sales_history.empty:
         return (None, None, 0, 0)
 
-    history = sales_history.copy()
-    history["date"] = pd.to_datetime(history["date"]).dt.normalize()
-    history = history.sort_values("date").reset_index(drop=True)
+    dense_series = _dense_daily_units_series(sales_history)
+    if dense_series.empty:
+        return (None, None, 0, 0)
+
+    history = pd.DataFrame(
+        {
+            "date": pd.DatetimeIndex(dense_series.index),
+            "units": dense_series.to_numpy(dtype=float),
+        }
+    ).reset_index(drop=True)
     horizon = max(3, min(14, int(lead_time_days)))
     if len(history) < horizon + LEAD_TIME_BACKTEST_MIN_TRAIN_DAYS:
         return (None, None, 0, 0)
@@ -580,11 +710,8 @@ def _lead_time_operational_backtest(
 
 
 def _baseline_forecast_frame(sales_history: pd.DataFrame, template_frame: pd.DataFrame) -> pd.DataFrame:
-    trailing_values = (
-        sales_history.sort_values("date")["units"].astype(float).tail(7).to_numpy()
-        if not sales_history.empty
-        else np.array([], dtype=float)
-    )
+    dense_history = _dense_daily_units_series(sales_history)
+    trailing_values = dense_history.tail(7).to_numpy(dtype=float) if not dense_history.empty else np.array([], dtype=float)
     baseline_level = float(np.mean(trailing_values)) if trailing_values.size > 0 else 0.0
     baseline_level = max(baseline_level, 0.0)
     lower = max(0.0, baseline_level * 0.8)
@@ -806,6 +933,7 @@ def run_daily_forecast(
         quality_warnings: list[str] = []
         gated_recommendations: list[str] = []
         fallback_recommendations: list[str] = []
+        validation_rows: list[dict[str, object]] = []
 
         products = list(session.scalars(select(Product).where(Product.active.is_(True))).all())
         sales_histories: dict[int, pd.DataFrame] = {
@@ -963,6 +1091,21 @@ def run_daily_forecast(
                 fallback_reason = _recommendation_fallback_reason(reason_tokens) or BASELINE_FALLBACK_REASON
                 fallback_recommendations.append(f"{product.sku}:{fallback_reason}")
 
+            validation_rows.append(
+                _build_validation_row(
+                    product_id=product.id,
+                    sku=product.sku,
+                    candidate_model_name=model_name,
+                    quality=quality,
+                    lead_time_wmape=lead_time_wmape,
+                    lead_time_baseline_wmape=lead_time_baseline_wmape,
+                    lead_time_model_win_count=lead_time_model_win_count,
+                    lead_time_windows_evaluated=lead_time_windows_evaluated,
+                    confidence_score=confidence_score,
+                    action=action,
+                )
+            )
+
             for _, row in persisted_forecast_frame.iterrows():
                 session.add(
                     SkuForecast(
@@ -995,9 +1138,12 @@ def run_daily_forecast(
         gated_note = ";".join(sorted(gated_recommendations)[:30]) if gated_recommendations else "none"
         fallback_note = ";".join(sorted(fallback_recommendations)[:30]) if fallback_recommendations else "none"
         qa_note = f"critical:{critical_skus},warning:{warning_skus},issue_types:{issue_type_count}"
+        validation_payload = _build_validation_report_payload(run.id, validation_rows)
+        validation_report_path = _write_validation_report(run.id, validation_payload)
         run.notes = (
             f"qa={qa_note}|qa_report={qa_report_path.name}|"
-            f"quality_flags={quality_note}|gated={gated_note}|fallback={fallback_note}"
+            f"quality_flags={quality_note}|gated={gated_note}|fallback={fallback_note}|"
+            f"validation_report={validation_report_path.name}"
         )
 
         session.commit()
@@ -1034,6 +1180,8 @@ def main() -> None:
                 print(f"forecast_data_qa_summary={section.split('=', 1)[1]}")
             if section.startswith("qa_report="):
                 print(f"forecast_data_qa_report={section.split('=', 1)[1]}")
+            if section.startswith("validation_report="):
+                print(f"forecast_validation_report={section.split('=', 1)[1]}")
 
 
 if __name__ == "__main__":

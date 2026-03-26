@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
-
 from app.ml.predict import (
     ForecastDataQuality,
     _apply_residual_bias_correction,
@@ -182,6 +181,30 @@ def test_stockout_censoring_uses_restock_signal_for_short_zero_runs() -> None:
     assert len(censored_dates) == 3
     assert pd.Timestamp(datetime(2026, 1, 6)).normalize() in censored_dates
     assert pd.Timestamp(datetime(2026, 1, 8)).normalize() in censored_dates
+
+
+def test_stockout_censoring_handles_terminal_zero_runs_with_strong_recent_demand() -> None:
+    history = _build_daily_history(
+        datetime(2026, 1, 1),
+        [4, 5, 3, 4, 5, 3, 4] * 4 + [0, 0, 0, 0, 0, 0],
+    )
+
+    censored_dates = estimate_censored_sales_dates(history)
+
+    assert len(censored_dates) == 6
+    assert pd.Timestamp(datetime(2026, 1, 29)).normalize() in censored_dates
+    assert pd.Timestamp(datetime(2026, 2, 3)).normalize() in censored_dates
+
+
+def test_stockout_censoring_does_not_flag_terminal_zero_runs_with_sparse_recent_demand() -> None:
+    history = _build_daily_history(
+        datetime(2026, 1, 1),
+        [0, 1, 0, 0, 2, 0, 0] * 4 + [0, 0, 0, 0, 0, 0],
+    )
+
+    censored_dates = estimate_censored_sales_dates(history)
+
+    assert not censored_dates
 
 
 def test_spike_cap_clamps_unrealistic_prediction_outliers() -> None:

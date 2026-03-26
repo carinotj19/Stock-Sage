@@ -951,7 +951,7 @@ def run_scraper_cycle(
                         verbose=verbose,
                     )
 
-                attempted_products = len(active_products) if mode in {"per_product_search", "shopify_suggest_json"} else 0
+                attempted_products = len(active_products)
                 state_changed = _update_runtime_state(
                     config,
                     attempted_products=attempted_products,

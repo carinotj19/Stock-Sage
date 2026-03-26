@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.dashboard import (
     DashboardKpis,
+    ForecastRunComparisonResponse,
     ForecastReportResponse,
     ItemForecastDetail,
     LowStockRow,
@@ -63,6 +64,22 @@ def get_forecast_report(
             include_details=include_details,
             evaluation_days=evaluation_days,
             run_id=run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/forecast-report/compare", response_model=ForecastRunComparisonResponse)
+def get_forecast_report_compare(
+    baseline_run_id: int | None = Query(default=None, ge=1),
+    candidate_run_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+) -> ForecastRunComparisonResponse:
+    service = DashboardService(db)
+    try:
+        return service.get_forecast_report_comparison(
+            baseline_run_id=baseline_run_id,
+            candidate_run_id=candidate_run_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

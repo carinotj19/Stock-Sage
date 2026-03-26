@@ -54,9 +54,10 @@ class PricingService:
         results: list[PriceComparisonRow] = []
         for product in products:
             competitor_points = list(latest_by_product.get(product.id, {}).values())
+            benchmark_points = [point for point in competitor_points if point.in_stock is not False]
             cheapest = (
-                min((point.competitor_price for point in competitor_points), default=None)
-                if competitor_points
+                min((point.competitor_price for point in benchmark_points), default=None)
+                if benchmark_points
                 else None
             )
 
@@ -84,4 +85,3 @@ class PricingService:
             )
 
         return results
-
