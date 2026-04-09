@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ForecastItemModal } from "./components/ForecastItemModal";
+import { InventoryProductsTable } from "./components/InventoryProductsTable";
 import { LowStockTable } from "./components/LowStockTable";
 import { PriceComparisonTable } from "./components/PriceComparisonTable";
 import { SourceQualityPanel } from "./components/SourceQualityPanel";
@@ -7,14 +8,15 @@ import { StockoutCard } from "./components/StockoutCard";
 import type {
   ForecastReportResponse,
   ItemForecastDetail,
+  ProductRow,
   LowStockRow,
   PriceComparisonRow,
-  ProductRow,
   ScraperSourceQualityRow,
   SalesTrendPoint,
   StockoutRow
 } from "./types";
 import "./styles.css";
+import type { InventoryProductUpdatePayload } from "./components/InventoryProductsTable";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -249,6 +251,22 @@ const App = () => {
       await loadData();
     } catch (error) {
       setActionMessage(`Adjust stock failed: ${String(error)}`);
+    }
+  };
+
+  const onSaveProduct = async (productId: number, payload: InventoryProductUpdatePayload) => {
+    setActionMessage(null);
+    try {
+      await requestJson<ProductRow>(`/products/${productId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadData();
+      setActionMessage("Product updated.");
+    } catch (error) {
+      setActionMessage(`Update product failed: ${String(error)}`);
+      throw error;
     }
   };
 
@@ -609,39 +627,7 @@ const App = () => {
             </form>
           </section>
 
-          <section className="panel panel-wide inventory-card inventory-card--products">
-            <h2>Products</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>On Hand</th>
-                    <th>Sell Price</th>
-                    <th>Safety Stock</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.length === 0 ? (
-                    <tr>
-                      <td colSpan={5}>No products yet.</td>
-                    </tr>
-                  ) : (
-                    products.map((product) => (
-                      <tr key={product.id}>
-                        <td>{product.sku}</td>
-                        <td>{product.name}</td>
-                        <td>{product.on_hand_qty}</td>
-                        <td>{formatPHP(product.sell_price)}</td>
-                        <td>{product.safety_stock}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <InventoryProductsTable formatPHP={formatPHP} onSaveProduct={onSaveProduct} products={products} />
         </section>
       ) : null}
 

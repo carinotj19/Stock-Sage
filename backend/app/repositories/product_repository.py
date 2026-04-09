@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import InventoryBalance, Product
-from app.schemas.inventory import ProductCreate
+from app.schemas.inventory import ProductCreate, ProductUpdate
 
 
 class ProductRepository:
@@ -29,6 +29,14 @@ class ProductRepository:
         db.flush()
         return balance
 
+    def update_product(self, db: Session, product: Product, payload: ProductUpdate) -> Product:
+        product.sku = payload.sku
+        product.name = payload.name
+        product.sell_price = payload.sell_price
+        product.safety_stock = payload.safety_stock
+        db.flush()
+        return product
+
     def list_products(self, db: Session) -> list[Product]:
         statement = select(Product).order_by(Product.name.asc())
         return list(db.scalars(statement).all())
@@ -38,4 +46,3 @@ class ProductRepository:
 
     def get_inventory_balance(self, db: Session, product_id: int) -> InventoryBalance | None:
         return db.get(InventoryBalance, product_id)
-

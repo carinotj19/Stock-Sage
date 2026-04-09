@@ -7,6 +7,7 @@ from app.schemas.inventory import (
     InventoryAdjustResponse,
     ProductCreate,
     ProductRead,
+    ProductUpdate,
     SupplierCreate,
     SupplierRead,
 )
@@ -35,8 +36,13 @@ def list_products(db: Session = Depends(get_db)) -> list[ProductRead]:
     return service.list_products()
 
 
+@router.patch("/products/{product_id}", response_model=ProductRead)
+def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)) -> ProductRead:
+    service = InventoryService(db)
+    return service.update_product(product_id, payload)
+
+
 @router.post("/inventory/adjust", response_model=InventoryAdjustResponse)
 def adjust_inventory(payload: InventoryAdjustRequest, db: Session = Depends(get_db)) -> InventoryAdjustResponse:
     service = InventoryService(db)
     return service.adjust_stock(payload)
-

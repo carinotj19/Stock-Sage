@@ -703,6 +703,27 @@ tbody tr:hover {
   min-width: 0;
 }
 
+.table-input {
+  border: 1px solid #d8ccb7;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.88rem;
+  width: 100%;
+  min-width: 110px;
+}
+
+.table-action-group {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.table-action-btn {
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8rem;
+}
+
 .panel-wide {
   grid-column: 1 / -1;
 }

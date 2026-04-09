@@ -79,6 +79,24 @@ def test_inventory_crud_and_adjustment() -> None:
     assert len(products) == 1
     assert products[0]["name"] == "Milk"
 
+    update_resp = client.patch(
+        f"/products/{product_id}",
+        json={
+            "sku": "SKU-100-UPDATED",
+            "name": "Whole Milk",
+            "sell_price": "4.25",
+            "safety_stock": 6,
+            "on_hand_qty": 14,
+        },
+    )
+    assert update_resp.status_code == 200
+    updated_product = update_resp.json()
+    assert updated_product["sku"] == "SKU-100-UPDATED"
+    assert updated_product["name"] == "Whole Milk"
+    assert updated_product["sell_price"] == "4.25"
+    assert updated_product["safety_stock"] == 6
+    assert updated_product["on_hand_qty"] == 14
+
     adjust_resp = client.post(
         "/inventory/adjust",
         json={
@@ -89,9 +107,8 @@ def test_inventory_crud_and_adjustment() -> None:
         },
     )
     assert adjust_resp.status_code == 200
-    assert adjust_resp.json()["on_hand_qty"] == 7
+    assert adjust_resp.json()["on_hand_qty"] == 11
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
-

@@ -58,6 +58,14 @@ class ProductRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProductUpdate(BaseModel):
+    sku: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+    sell_price: Decimal = Field(ge=0)
+    safety_stock: int = Field(ge=0)
+    on_hand_qty: int = Field(ge=0)
+
+
 class InventoryAdjustRequest(BaseModel):
     product_id: int
     qty_delta: int
@@ -71,4 +79,3 @@ class InventoryAdjustResponse(BaseModel):
     product_id: int
     on_hand_qty: int
     last_movement_at: datetime | None
-

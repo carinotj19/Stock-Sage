@@ -11,6 +11,7 @@ from app.schemas.inventory import (
     InventoryAdjustResponse,
     ProductCreate,
     ProductRead,
+    ProductUpdate,
     SupplierCreate,
 )
 
@@ -106,6 +107,50 @@ class InventoryService:
 
         return result
 
+    def update_product(self, product_id: int, payload: ProductUpdate) -> ProductRead:
+        product = self.product_repository.get_product(self.db, product_id)
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product {product_id} was not found.",
+            )
+
+        balance = self.product_repository.get_inventory_balance(self.db, product_id)
+        if balance is None:
+            balance = self.product_repository.create_inventory_balance(self.db, product_id, on_hand_qty=0)
+
+        current_qty = balance.on_hand_qty
+        self.product_repository.update_product(self.db, product, payload)
+
+        qty_delta = payload.on_hand_qty - current_qty
+        if qty_delta != 0:
+            timestamp = datetime.now(timezone.utc)
+            balance.on_hand_qty = payload.on_hand_qty
+            balance.last_movement_at = timestamp
+            self.db.add(
+                StockMovement(
+                    product_id=product_id,
+                    movement_type="adjustment",
+                    qty_delta=qty_delta,
+                    reason="product_edit",
+                    reference_type="manual_update",
+                    occurred_at=timestamp,
+                )
+            )
+
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Product with SKU '{payload.sku}' already exists.",
+            ) from exc
+
+        self.db.refresh(product)
+        self.db.refresh(balance)
+        return self._to_product_read(product_id)
+
     def adjust_stock(self, payload: InventoryAdjustRequest) -> InventoryAdjustResponse:
         product = self.product_repository.get_product(self.db, payload.product_id)
         if product is None:
@@ -174,4 +219,3 @@ class InventoryService:
             created_at=product.created_at,
             updated_at=product.updated_at,
         )
-

@@ -63,6 +63,19 @@ Set `VITE_API_BASE_URL=http://localhost:8000`, then run:
 npm run dev
 ```
 
+### Run Both Frontend And Backend
+
+After installing backend and frontend dependencies, you can start both servers from the repo root:
+
+```powershell
+npm run dev
+```
+
+The root launcher starts:
+
+- backend on `http://localhost:8000`
+- frontend in `frontend/` using Vite
+
 ## Scheduled Jobs
 
 Run the daily forecast job:
