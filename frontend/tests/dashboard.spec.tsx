@@ -24,6 +24,20 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
+  it("renders the add product category field as a dropdown", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+
+    const categorySelect = await screen.findByLabelText("Category");
+    expect(categorySelect.tagName).toBe("SELECT");
+
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(
+      expect.arrayContaining(["Select category", "Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"])
+    );
+  });
+
   it("allows editing a product from the inventory table", async () => {
     const product = {
       id: 1,

@@ -19,6 +19,7 @@ import "./styles.css";
 import type { InventoryProductUpdatePayload } from "./components/InventoryProductsTable";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 
 const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
@@ -519,10 +520,17 @@ const App = () => {
               </label>
               <label>
                 Category
-                <input
+                <select
                   value={newProduct.category}
                   onChange={(event) => setNewProduct((prev) => ({ ...prev, category: event.target.value }))}
-                />
+                >
+                  <option value="">Select category</option>
+                  {PRODUCT_CATEGORY_OPTIONS.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Cost Price
