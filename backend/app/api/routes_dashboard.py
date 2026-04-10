@@ -86,9 +86,13 @@ def get_forecast_report_compare(
 
 
 @router.get("/item-forecast/{product_id}", response_model=ItemForecastDetail)
-def get_item_forecast(product_id: int, db: Session = Depends(get_db)) -> ItemForecastDetail:
+def get_item_forecast(
+    product_id: int,
+    history_days: int = Query(default=365, ge=30, le=365),
+    db: Session = Depends(get_db),
+) -> ItemForecastDetail:
     service = DashboardService(db)
     try:
-        return service.get_item_forecast_detail(product_id)
+        return service.get_item_forecast_detail(product_id, history_days=history_days)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -214,6 +214,91 @@ def test_dashboard_endpoints() -> None:
     engine.dispose()
 
 
+def test_item_forecast_defaults_to_up_to_365_days_of_dense_history() -> None:
+    engine = _build_test_engine()
+    TestingSessionLocal = _build_test_session(engine)
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    app = create_app()
+
+    def override_get_db() -> Generator[Session, None, None]:
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    supplier_resp = client.post("/suppliers", json={"name": "History Supplier", "lead_time_days_default": 3})
+    supplier_id = supplier_resp.json()["id"]
+
+    product_resp = client.post(
+        "/products",
+        json={
+            "sku": "SKU-HISTORY-1",
+            "name": "History Rich Item",
+            "supplier_id": supplier_id,
+            "cost_price": "2.00",
+            "sell_price": "3.00",
+            "reorder_min_qty": 4,
+            "safety_stock": 2,
+            "initial_stock": 120,
+        },
+    )
+    product_id = product_resp.json()["id"]
+
+    with TestingSessionLocal() as db:
+        run = ForecastRun(model_version="NaiveMA", horizon_days=30)
+        db.add(run)
+        db.flush()
+        db.add(
+            ReorderRecommendation(
+                run_id=run.id,
+                product_id=product_id,
+                predicted_stockout_date=date(2026, 1, 15),
+                reorder_point=8,
+                suggested_qty=10,
+                confidence_score=0.75,
+            )
+        )
+
+        for offset in range(400, 0, -5):
+            sold_at = datetime.now(timezone.utc) - timedelta(days=offset)
+            transaction = SalesTransaction(
+                receipt_no=f"R-HISTORY-{offset}",
+                sold_at=sold_at,
+                total_amount=6.00,
+                payment_method="cash",
+            )
+            db.add(transaction)
+            db.flush()
+            db.add(
+                SalesItem(
+                    sales_transaction_id=transaction.id,
+                    product_id=product_id,
+                    qty=2,
+                    unit_sell_price=3.00,
+                    line_total=6.00,
+                )
+            )
+
+        db.commit()
+
+    item_forecast_resp = client.get(f"/dashboard/item-forecast/{product_id}")
+    assert item_forecast_resp.status_code == 200
+    item_forecast = item_forecast_resp.json()
+    history_points = [point for point in item_forecast["demand_points"] if point["kind"] == "history"]
+
+    assert len(history_points) == 365
+
+    app.dependency_overrides.clear()
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
 def test_scraper_source_quality_uses_last_run_at_and_runtime_state_for_zero_row_standard_sources() -> None:
     engine = _build_test_engine()
     TestingSessionLocal = _build_test_session(engine)

@@ -3,6 +3,44 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/App";
 
+const toDateString = (baseDate: Date, offsetDays: number) => {
+  const date = new Date(baseDate);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+};
+
+const buildItemForecastDetail = (historyDays: number) => ({
+  product_id: 1,
+  sku: "SKU-LOW-1",
+  name: "Low Stock Item",
+  forecast_horizon_days: 30,
+  predicted_per_month: 90,
+  in_stock: 4,
+  reorder_qty: 10,
+  confidence_pct: 75,
+  predicted_stockout_date: "2026-04-12",
+  days_until_stockout: 2,
+  when_to_buy_message: "Order 10 units now.",
+  demand_points: [
+    ...Array.from({ length: historyDays }, (_, index) => ({
+      date: toDateString(new Date("2025-09-01T00:00:00.000Z"), index),
+      units: (index % 4) + 1,
+      kind: "history" as const
+    })),
+    ...Array.from({ length: 30 }, (_, index) => ({
+      date: toDateString(new Date("2026-04-01T00:00:00.000Z"), index),
+      units: 2 + (index % 3),
+      kind: "forecast" as const
+    }))
+  ],
+  price_analysis: {
+    store_price: "3000.00",
+    market_avg_price: "2950.00",
+    difference_pct: "1.69",
+    suggested_price: null,
+    competitor_benchmarks: []
+  }
+});
 
 describe("Dashboard rendering", () => {
   beforeEach(() => {
@@ -119,5 +157,56 @@ describe("Dashboard rendering", () => {
 
     expect(await screen.findByText("Product updated.")).toBeInTheDocument();
     expect(await screen.findByText("AMD Ryzen 3 3200G")).toBeInTheDocument();
+  });
+
+  it("loads the item forecast with a 365-day history window", async () => {
+    const lowStockRows = [
+      {
+        product_id: 1,
+        sku: "SKU-LOW-1",
+        name: "Low Stock Item",
+        on_hand_qty: 4,
+        reorder_threshold: 10
+      }
+    ];
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/dashboard/low-stock")) {
+        return {
+          ok: true,
+          json: async () => lowStockRows
+        };
+      }
+
+      if (url.includes("/dashboard/item-forecast/1")) {
+        const parsedUrl = new URL(url);
+        const historyDays = Number(parsedUrl.searchParams.get("history_days") ?? "365");
+
+        return {
+          ok: true,
+          json: async () => buildItemForecastDetail(historyDays)
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Low Stock Item"));
+
+    const historyWindowMetric = await screen.findByText("Sales history period");
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/dashboard/item-forecast/1?history_days=365"))).toBe(true);
+    });
+    expect(historyWindowMetric.closest("article")).toHaveTextContent("365 days");
+    expect(screen.queryByLabelText("History range")).not.toBeInTheDocument();
   });
 });

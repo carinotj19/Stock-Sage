@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -268,6 +268,9 @@ LEGACY_SEED_SKUS = {
     "PC-MB-001",
 }
 SEED_RECEIPT_PREFIXES = ("DEMO-", "SIM-")
+DEMO_SALES_HISTORY_DAYS = 90
+DEMO_RESTOCK_REASON = "demo_restock"
+DEMO_PAYMENT_METHODS = ("cash", "gcash", "card")
 
 
 COMPETITOR_SITE_DEFS = [
@@ -831,6 +834,7 @@ def _clear_seeded_sales(session) -> None:
     )
 
     _delete_sales_transactions(session, seeded_transaction_ids)
+    session.execute(delete(StockMovement).where(StockMovement.reason == DEMO_RESTOCK_REASON))
 
 
 def _purge_legacy_demo_products(session) -> int:
@@ -853,71 +857,183 @@ def _purge_legacy_demo_products(session) -> int:
     return len(legacy_product_ids)
 
 
-def _seed_sales_history(session, products: list[Product], days: int = 45) -> None:
+def _seed_sales_history(session, products: list[Product], days: int = DEMO_SALES_HISTORY_DAYS) -> None:
     _clear_seeded_sales(session)
 
-    random.seed(42)
-    start_date = datetime.now(timezone.utc) - timedelta(days=days)
+    def sales_profile(product: Product) -> tuple[float, int]:
+        name = product.name.lower()
+        category = (product.category or "").lower()
+
+        if "rtx 5080" in name:
+            return (0.45, 1)
+        if "rtx" in name or category == "gpu":
+            return (0.65, 1)
+        if "motherboard" in name or category == "motherboard":
+            return (0.8, 1)
+        if "nv2" in name or "fury" in name or category in {"ram", "ssd"}:
+            return (1.8, 3)
+        if category in {"cpu", "cooler", "psu", "case"}:
+            return (1.2, 2)
+        return (1.0, 2)
+
+    def weighted_sample(candidates: list[Product], weights: list[float], sample_size: int, rng: random.Random) -> list[Product]:
+        pool = list(zip(candidates, weights))
+        chosen: list[Product] = []
+
+        while pool and len(chosen) < sample_size:
+            total_weight = sum(weight for _, weight in pool)
+            pick = rng.random() * total_weight
+            running_weight = 0.0
+
+            for index, (candidate, weight) in enumerate(pool):
+                running_weight += weight
+                if running_weight >= pick:
+                    chosen.append(candidate)
+                    pool.pop(index)
+                    break
+
+        return chosen
+
+    def restock_inventory(
+        sold_at: datetime,
+        target_levels: dict[int, int],
+        last_restock_dates: dict[int, date],
+        rng: random.Random,
+    ) -> None:
+        for product in products:
+            balance = session.get(InventoryBalance, product.id)
+            if balance is None:
+                continue
+
+            target_level = target_levels.get(product.id, balance.on_hand_qty)
+            threshold = max(product.safety_stock + product.reorder_min_qty, max(2, int(target_level * 0.35)))
+            if balance.on_hand_qty > threshold or last_restock_dates.get(product.id) == sold_at.date():
+                continue
+
+            restock_buffer = max(2, target_level // 4)
+            restock_qty = max(0, target_level + rng.randint(1, restock_buffer) - balance.on_hand_qty)
+            if restock_qty <= 0:
+                continue
+
+            occurred_at = sold_at + timedelta(hours=8)
+            balance.on_hand_qty += restock_qty
+            balance.last_movement_at = occurred_at
+            session.add(
+                StockMovement(
+                    product_id=product.id,
+                    movement_type="restock",
+                    qty_delta=restock_qty,
+                    unit_price=product.cost_price,
+                    reason=DEMO_RESTOCK_REASON,
+                    reference_type="demo_seed",
+                    occurred_at=occurred_at,
+                )
+            )
+            last_restock_dates[product.id] = sold_at.date()
+
+    rng = random.Random(42)
+    start_date = (datetime.now(timezone.utc) - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    target_levels: dict[int, int] = {}
+    for product in products:
+        balance = session.get(InventoryBalance, product.id)
+        target_levels[product.id] = max(1, int(balance.on_hand_qty if balance else 0))
+
+    last_restock_dates: dict[int, date] = {}
     tx_counter = 0
 
     for day_offset in range(days):
-        sold_at = start_date + timedelta(days=day_offset)
-        planned_sales: list[tuple[Product, int]] = []
+        day_start = start_date + timedelta(days=day_offset)
+        restock_inventory(day_start, target_levels, last_restock_dates, rng)
 
-        for product in products:
-            balance = session.get(InventoryBalance, product.id)
-            if balance is None or balance.on_hand_qty <= 0:
+        transaction_slots = 1 + rng.randint(0, 1)
+        if day_start.weekday() in {4, 5}:
+            transaction_slots += 1
+        if day_start.day in {15, 30}:
+            transaction_slots += 1
+
+        for slot in range(transaction_slots):
+            available_products: list[Product] = []
+            weights: list[float] = []
+
+            for product in products:
+                balance = session.get(InventoryBalance, product.id)
+                if balance is None or balance.on_hand_qty <= 0:
+                    continue
+
+                weight, _ = sales_profile(product)
+                target_level = max(target_levels.get(product.id, balance.on_hand_qty), 1)
+                availability_ratio = balance.on_hand_qty / target_level
+                available_products.append(product)
+                weights.append(weight * max(0.35, availability_ratio))
+
+            if not available_products:
+                break
+
+            basket_weights = [0.5, 0.35, 0.15]
+            if day_start.weekday() in {4, 5}:
+                basket_weights = [0.35, 0.45, 0.20]
+            basket_size = min(len(available_products), rng.choices([1, 2, 3], weights=basket_weights, k=1)[0])
+            basket = weighted_sample(available_products, weights, basket_size, rng)
+
+            line_items: list[tuple[Product, int]] = []
+            for product in basket:
+                balance = session.get(InventoryBalance, product.id)
+                if balance is None or balance.on_hand_qty <= 0:
+                    continue
+
+                _, max_qty = sales_profile(product)
+                weekend_bonus = 1 if day_start.weekday() in {4, 5} and max_qty < 4 else 0
+                qty_cap = min(balance.on_hand_qty, max_qty + weekend_bonus)
+                qty = 1 if qty_cap <= 1 else rng.randint(1, qty_cap)
+                if qty > 0:
+                    line_items.append((product, qty))
+
+            if not line_items:
                 continue
 
-            name = product.name.lower()
-            if "rtx" in name:
-                chance, max_qty = 0.18, 1
-            elif "motherboard" in name:
-                chance, max_qty = 0.20, 1
-            elif "nv2" in name or "fury" in name:
-                chance, max_qty = 0.45, 3
-            else:
-                chance, max_qty = 0.30, 2
-
-            if random.random() > chance:
-                continue
-
-            qty = min(random.randint(1, max_qty), balance.on_hand_qty)
-            if qty > 0:
-                planned_sales.append((product, qty))
-
-        if not planned_sales:
-            continue
-
-        tx = SalesTransaction(
-            receipt_no=f"SIM-{tx_counter:04d}",
-            sold_at=sold_at,
-            total_amount=Decimal("0.00"),
-            payment_method="cash",
-        )
-        session.add(tx)
-        session.flush()
-
-        total = Decimal("0.00")
-        for product, qty in planned_sales:
-            line_total = product.sell_price * qty
-            session.add(
-                SalesItem(
-                    sales_transaction_id=tx.id,
-                    product_id=product.id,
-                    qty=qty,
-                    unit_sell_price=product.sell_price,
-                    line_total=line_total,
-                )
+            sold_at = day_start + timedelta(hours=10 + (slot * 3) + rng.randint(0, 1), minutes=rng.randint(0, 59))
+            tx = SalesTransaction(
+                receipt_no=f"SIM-{tx_counter:05d}",
+                sold_at=sold_at,
+                total_amount=Decimal("0.00"),
+                payment_method=rng.choice(DEMO_PAYMENT_METHODS),
             )
-            total += line_total
+            session.add(tx)
+            session.flush()
 
-            balance = session.get(InventoryBalance, product.id)
-            if balance:
-                balance.on_hand_qty = max(balance.on_hand_qty - qty, 0)
+            total = Decimal("0.00")
+            for product, qty in line_items:
+                line_total = product.sell_price * qty
+                session.add(
+                    SalesItem(
+                        sales_transaction_id=tx.id,
+                        product_id=product.id,
+                        qty=qty,
+                        unit_sell_price=product.sell_price,
+                        line_total=line_total,
+                    )
+                )
+                session.add(
+                    StockMovement(
+                        product_id=product.id,
+                        movement_type="sale",
+                        qty_delta=-qty,
+                        unit_price=product.sell_price,
+                        reason="sale",
+                        reference_type="sales_transaction",
+                        reference_id=tx.id,
+                        occurred_at=sold_at,
+                    )
+                )
+                total += line_total
 
-        tx.total_amount = total
-        tx_counter += 1
+                balance = session.get(InventoryBalance, product.id)
+                if balance:
+                    balance.on_hand_qty = max(balance.on_hand_qty - qty, 0)
+                    balance.last_movement_at = sold_at
+
+            tx.total_amount = total
+            tx_counter += 1
 
 
 def _upsert_competitor_source(session, name: str, base_url: str, config: dict) -> None:
@@ -964,7 +1080,7 @@ def main() -> None:
     try:
         removed_legacy = _purge_legacy_demo_products(session)
         products = [_upsert_product(session, payload) for payload in PC_PARTS_CATALOG]
-        _seed_sales_history(session, products, days=45)
+        _seed_sales_history(session, products, days=DEMO_SALES_HISTORY_DAYS)
         source_count = _seed_competitor_sources(session)
         session.commit()
         print(f"legacy_demo_products_removed={removed_legacy}")

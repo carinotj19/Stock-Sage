@@ -361,7 +361,8 @@ class DashboardService:
             ],
             columns=["date", "units"],
         )
-        full_dates = pd.date_range(start=raw["date"].min(), end=raw["date"].max(), freq="D").date
+        end_date = max(raw["date"].max(), datetime.now(timezone.utc).date())
+        full_dates = pd.date_range(start=raw["date"].min(), end=end_date, freq="D").date
         dense = pd.DataFrame({"date": full_dates})
         dense = dense.merge(raw, on="date", how="left")
         dense["units"] = dense["units"].fillna(0.0)
@@ -1837,7 +1838,7 @@ class DashboardService:
 
         return sorted(latest_by_source.values(), key=lambda item: item.price)
 
-    def get_item_forecast_detail(self, product_id: int) -> ItemForecastDetail:
+    def get_item_forecast_detail(self, product_id: int, *, history_days: int = 365) -> ItemForecastDetail:
         product = self.db.get(Product, product_id)
         if product is None or not product.active:
             raise ValueError("Product not found.")
@@ -1874,7 +1875,7 @@ class DashboardService:
         horizon_days = max(run.horizon_days, 1)
         predicted_per_month = (predicted_total / horizon_days) * 30
 
-        history_dense = self._load_sales_history_dense(product.id).tail(30)
+        history_dense = self._load_sales_history_dense(product.id).tail(max(1, history_days))
         demand_points: list[ItemDemandPoint] = [
             ItemDemandPoint(
                 date=(row.date if isinstance(row.date, date) else date.fromisoformat(str(row.date))),

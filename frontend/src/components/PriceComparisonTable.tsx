@@ -31,8 +31,8 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
           <thead>
             <tr>
               <th>SKU</th>
-              <th className="align-right">Store</th>
-              <th className="align-right">Competitor</th>
+              <th className="align-right">Store Price</th>
+              <th className="align-right">Competitor Price</th>
               <th>Difference</th>
               <th>Competitiveness</th>
             </tr>

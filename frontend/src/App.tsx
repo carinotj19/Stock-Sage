@@ -20,6 +20,7 @@ import type { InventoryProductUpdatePayload } from "./components/InventoryProduc
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
+const ITEM_FORECAST_HISTORY_DAYS = 365;
 
 const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
@@ -198,6 +199,41 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (selectedForecastProductId === null) return;
+
+    let isCancelled = false;
+
+    const loadItemForecast = async () => {
+      setForecastModalError(null);
+      setIsForecastModalLoading(true);
+
+      try {
+        const detail = await requestJson<ItemForecastDetail>(
+          `/dashboard/item-forecast/${selectedForecastProductId}?history_days=${ITEM_FORECAST_HISTORY_DAYS}`
+        );
+
+        if (!isCancelled) {
+          setSelectedForecastItem(detail);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setForecastModalError(`Unable to load item forecast: ${String(error)}`);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsForecastModalLoading(false);
+        }
+      }
+    };
+
+    void loadItemForecast();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedForecastProductId]);
+
   const onCreateProduct = async (event: FormEvent) => {
     event.preventDefault();
     setActionMessage(null);
@@ -296,19 +332,10 @@ const App = () => {
     }
   };
 
-  const onOpenItemForecast = async (productId: number) => {
+  const onOpenItemForecast = (productId: number) => {
     setSelectedForecastProductId(productId);
     setSelectedForecastItem(null);
     setForecastModalError(null);
-    setIsForecastModalLoading(true);
-    try {
-      const detail = await requestJson<ItemForecastDetail>(`/dashboard/item-forecast/${productId}`);
-      setSelectedForecastItem(detail);
-    } catch (error) {
-      setForecastModalError(`Unable to load item forecast: ${String(error)}`);
-    } finally {
-      setIsForecastModalLoading(false);
-    }
   };
 
   const onCloseItemForecast = () => {

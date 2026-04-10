@@ -299,6 +299,10 @@ body {
   margin: 0;
 }
 
+.panel-head h3 {
+  margin: 0;
+}
+
 .panel-scroll {
   max-height: 540px;
   overflow: auto;
@@ -854,6 +858,102 @@ tbody tr:hover {
   font-size: 0.96rem;
 }
 
+.modal-section h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.86rem;
+}
+
+.modal-demand-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.modal-demand-metric {
+  border: 1px solid #efe6d8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.7rem 0.72rem;
+}
+
+.modal-demand-helper {
+  margin: 0.24rem 0 0;
+  color: var(--muted-ink);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.modal-stockout-chip {
+  min-width: 190px;
+  border: 1px solid #e8dcc8;
+  border-radius: 12px;
+  background: #fffaf2;
+  padding: 0.6rem 0.72rem;
+  display: grid;
+  gap: 0.14rem;
+}
+
+.modal-demand-guide {
+  margin-bottom: 0.8rem;
+  border: 1px solid #efe6d8;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fffefb, #fbf7ef);
+  padding: 0.75rem;
+}
+
+.modal-demand-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.modal-demand-guide-item {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  border: 1px solid #efe6d8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.62rem 0.68rem;
+}
+
+.modal-demand-guide-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.modal-demand-guide-copy {
+  margin: 0.18rem 0 0;
+  color: var(--muted-ink);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.modal-demand-swatch {
+  width: 28px;
+  height: 10px;
+  margin-top: 0.32rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.modal-demand-swatch--history {
+  background: #2f8f7b;
+}
+
+.modal-demand-swatch--trend {
+  background: #d47a1f;
+}
+
+.modal-demand-swatch--forecast {
+  background: linear-gradient(90deg, #4f7cff 0 70%, transparent 70% 100%);
+  background-size: 12px 10px;
+  background-repeat: repeat-x;
+}
+
 .modal-warning {
   border-color: #fdc993;
   background: #fff4e5;
@@ -875,6 +975,10 @@ tbody tr:hover {
   stroke-linejoin: round;
 }
 
+.modal-history-line--dense {
+  stroke-width: 1.9;
+}
+
 .modal-forecast-line {
   fill: none;
   stroke: #4f7cff;
@@ -882,6 +986,39 @@ tbody tr:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 6 6;
+}
+
+.modal-trend-line {
+  fill: none;
+  stroke: #d47a1f;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.95;
+}
+
+.modal-forecast-average-line {
+  stroke: #6d61d5;
+  stroke-width: 1.8;
+  stroke-dasharray: 4 5;
+  opacity: 0.9;
+}
+
+.modal-forecast-region {
+  fill: rgba(79, 124, 255, 0.05);
+}
+
+.modal-forecast-divider {
+  stroke: #4f7cff;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 5;
+  opacity: 0.95;
+}
+
+.modal-forecast-divider-label {
+  fill: #3757ba;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .modal-history-dot {
@@ -900,6 +1037,29 @@ tbody tr:hover {
   margin-top: 0.42rem;
   display: flex;
   justify-content: space-between;
+  gap: 0.35rem;
+  color: var(--muted-ink);
+  font-size: 0.78rem;
+}
+
+.modal-chart-axis span {
+  flex: 1;
+  text-align: center;
+}
+
+.modal-chart-axis span:first-child {
+  text-align: left;
+}
+
+.modal-chart-axis span:last-child {
+  text-align: right;
+}
+
+.modal-chart-summary {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
   color: var(--muted-ink);
   font-size: 0.78rem;
 }
@@ -1055,5 +1215,18 @@ tbody tr:hover {
 
   .modal-price-grid {
     grid-template-columns: 1fr;
+  }
+
+  .modal-demand-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modal-demand-guide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-stockout-chip {
+    min-width: 0;
+    width: 100%;
   }
 }
