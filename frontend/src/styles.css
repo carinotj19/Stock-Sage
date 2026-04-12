@@ -1170,6 +1170,10 @@ tbody tr:hover {
   color: #991b1b;
 }
 
+.dashboard-grid--source-quality {
+  margin-top: 15px;
+}
+
 .dashboard-grid--overview > :nth-child(1) {
   grid-column: span 12;
 }
