@@ -1186,15 +1186,15 @@ tbody tr:hover {
 }
 
 .dashboard-grid--overview > :nth-child(1) {
-  grid-column: span 12;
+  grid-column: span 3;
 }
 
 .dashboard-grid--overview > :nth-child(2) {
-  grid-column: span 6;
+  grid-column: span 4;
 }
 
 .dashboard-grid--overview > :nth-child(3) {
-  grid-column: span 6;
+  grid-column: span 5;
 }
 
 .dashboard-grid--source-quality > :nth-child(1) {
