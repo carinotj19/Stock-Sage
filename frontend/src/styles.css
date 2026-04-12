@@ -617,23 +617,8 @@ tbody tr:hover {
   font-weight: 700;
 }
 
-.row-action-btn {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fffaf2;
-  color: var(--ink);
-  padding: 0.38rem 0.62rem;
-  font-family: inherit;
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
+.price-compare-row--interactive {
   cursor: pointer;
-  transition: background-color 150ms ease, transform 150ms ease;
-}
-
-.row-action-btn:hover {
-  background: #f2ece0;
-  transform: translateY(-1px);
 }
 
 .price-delta {

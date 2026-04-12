@@ -6,7 +6,7 @@ type Props = {
 };
 
 export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
-  const hasRowAction = typeof onSelectProduct === "function";
+  const isInteractive = typeof onSelectProduct === "function";
 
   const toNumber = (value: string | null) => {
     if (value === null) return null;
@@ -37,13 +37,12 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
               <th className="align-right">Competitor Price</th>
               <th>Difference</th>
               <th>Competitiveness</th>
-              {hasRowAction ? <th>Action</th> : null}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={hasRowAction ? 6 : 5}>No competitor snapshots available.</td>
+                <td colSpan={5}>No competitor snapshots available.</td>
               </tr>
             ) : (
               rows.map((row) => {
@@ -60,7 +59,12 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
                       : Math.min(100, Math.round(85 + normalizedGap * 100));
 
                 return (
-                  <tr key={row.product_id} title={row.name}>
+                  <tr
+                    className={isInteractive ? "price-compare-row price-compare-row--interactive" : "price-compare-row"}
+                    key={row.product_id}
+                    onClick={isInteractive ? () => onSelectProduct(row.product_id) : undefined}
+                    title={`${row.name}${isInteractive ? " (click for forecast detail)" : ""}`}
+                  >
                     <td>
                       <span className="sku-value">{row.sku}</span>
                     </td>
@@ -85,18 +89,6 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
                         <span className="score-label">{competitiveness}%</span>
                       </div>
                     </td>
-                    {hasRowAction ? (
-                      <td>
-                        <button
-                          type="button"
-                          className="row-action-btn"
-                          aria-label={`Open forecast for ${row.sku}`}
-                          onClick={() => onSelectProduct?.(row.product_id)}
-                        >
-                          Open
-                        </button>
-                      </td>
-                    ) : null}
                   </tr>
                 );
               })

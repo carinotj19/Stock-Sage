@@ -26,7 +26,7 @@ describe("PriceComparisonTable", () => {
     expect(screen.getByRole("columnheader", { name: "Competitor Price" })).toBeInTheDocument();
   });
 
-  it("uses a separate action button instead of making the SKU clickable", () => {
+  it("opens the forecast detail from the whole row without an action button", () => {
     const onSelectProduct = vi.fn();
 
     render(
@@ -48,9 +48,14 @@ describe("PriceComparisonTable", () => {
     );
 
     expect(screen.queryByRole("button", { name: "CPU-AMD-3300" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Action" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open forecast for CPU-AMD-3300" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open forecast for CPU-AMD-3300" }));
+    const row = screen.getByText("CPU-AMD-3300").closest("tr");
+    expect(row).not.toBeNull();
 
+    fireEvent.click(row!);
     expect(onSelectProduct).toHaveBeenCalledWith(1);
   });
 });
