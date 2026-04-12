@@ -46,11 +46,38 @@ describe("Dashboard rendering", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => []
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "admin" }
+              : []
+        };
       })
     );
+  });
+
+  it("requires admin login before rendering dashboard content", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: false, configured: true, username: null }
+              : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Admin access")).toBeInTheDocument();
+    expect(screen.queryByText("Low Stock Alerts")).not.toBeInTheDocument();
   });
 
   it("renders all major dashboard sections", async () => {
@@ -97,6 +124,13 @@ describe("Dashboard rendering", () => {
     let currentProduct = product;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin" })
+        };
+      }
 
       if (url.endsWith("/products") && init?.method === "PATCH") {
         throw new Error("Unexpected bulk patch");
@@ -172,6 +206,13 @@ describe("Dashboard rendering", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin" })
+        };
+      }
 
       if (url.includes("/dashboard/low-stock")) {
         return {

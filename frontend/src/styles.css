@@ -36,6 +36,80 @@ body {
   padding: 1.4rem 1.2rem 2.6rem;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.auth-panel {
+  width: min(100%, 430px);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 1.3rem;
+  box-shadow: var(--shadow-strong);
+}
+
+.auth-panel .kicker {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.74rem;
+}
+
+.auth-panel h1 {
+  margin: 0.35rem 0 0;
+  font-size: clamp(1.8rem, 6vw, 2.35rem);
+}
+
+.auth-copy {
+  margin: 0.55rem 0 1.1rem;
+  color: var(--muted-ink);
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
+.auth-form input {
+  width: 100%;
+  border: 1px solid #d8ccb7;
+  border-radius: 8px;
+  padding: 0.7rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.auth-submit {
+  margin-top: 0.25rem;
+}
+
+.auth-submit:disabled {
+  opacity: 0.7;
+  cursor: default;
+  transform: none;
+}
+
+.auth-status {
+  margin-top: 0.85rem;
+}
+
+.auth-api {
+  overflow-wrap: anywhere;
+}
+
 .hero {
   padding: 0.45rem 0 1rem;
 }
@@ -538,19 +612,28 @@ tbody tr:hover {
   background: #f2ece0;
 }
 
-.inline-link-btn {
-  border: 0;
-  background: transparent;
+.sku-value {
   color: var(--accent-strong);
-  padding: 0;
-  font-family: inherit;
-  font-size: 0.88rem;
   font-weight: 700;
-  cursor: pointer;
 }
 
-.inline-link-btn:hover {
-  text-decoration: underline;
+.row-action-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf2;
+  color: var(--ink);
+  padding: 0.38rem 0.62rem;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms ease, transform 150ms ease;
+}
+
+.row-action-btn:hover {
+  background: #f2ece0;
+  transform: translateY(-1px);
 }
 
 .price-delta {

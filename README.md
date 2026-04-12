@@ -37,10 +37,17 @@ py -3 -m pip install -e ".[dev,forecast]"
 Copy-Item .env.example .env -Force
 ```
 
-Set `DATABASE_URL` in `backend/.env` to your Neon connection string, then run:
+Set `DATABASE_URL` in `backend/.env` to your Neon connection string. Also set the admin session signing secret:
+
+```powershell
+ADMIN_SESSION_SECRET=<long-random-secret>
+```
+
+Then migrate and create the first admin user:
 
 ```powershell
 py -3 -m alembic upgrade head
+py -3 -m app.cli.create_admin --username admin
 py -3 -m uvicorn app.main:app --reload --port 8000
 ```
 
@@ -116,6 +123,10 @@ npm test
 |---|---|---|
 | `DATABASE_URL` | Backend | Neon PostgreSQL connection string |
 | `CORS_ALLOW_ORIGINS` | Backend | Allowed frontend origins |
+| `ADMIN_SESSION_SECRET` | Backend | Secret used to sign admin session cookies |
+| `ADMIN_SESSION_TTL_SECONDS` | Backend | Admin session lifetime, defaults to `86400` |
+| `ADMIN_COOKIE_SECURE` | Backend | Set to `true` for HTTPS deployments |
+| `ADMIN_COOKIE_SAMESITE` | Backend | Use `none` for cross-site hosted frontend/backend domains |
 | `VITE_API_BASE_URL` | Frontend | Base URL for the FastAPI backend |
 
 Backend example env lives in [backend/.env.example](./backend/.env.example).

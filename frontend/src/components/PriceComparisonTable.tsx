@@ -6,6 +6,8 @@ type Props = {
 };
 
 export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
+  const hasRowAction = typeof onSelectProduct === "function";
+
   const toNumber = (value: string | null) => {
     if (value === null) return null;
     const numeric = Number(value);
@@ -35,12 +37,13 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
               <th className="align-right">Competitor Price</th>
               <th>Difference</th>
               <th>Competitiveness</th>
+              {hasRowAction ? <th>Action</th> : null}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={5}>No competitor snapshots available.</td>
+                <td colSpan={hasRowAction ? 6 : 5}>No competitor snapshots available.</td>
               </tr>
             ) : (
               rows.map((row) => {
@@ -57,42 +60,44 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
                       : Math.min(100, Math.round(85 + normalizedGap * 100));
 
                 return (
-                <tr key={row.product_id} title={row.name}>
-                  <td>
-                    {onSelectProduct ? (
-                      <button
-                        type="button"
-                        className="inline-link-btn"
-                        onClick={() => onSelectProduct(row.product_id)}
-                      >
-                        {row.sku}
-                      </button>
-                    ) : (
-                      row.sku
-                    )}
-                  </td>
-                  <td className="align-right">{formatPHP(row.store_price)}</td>
-                  <td className="align-right">{formatPHP(row.cheapest_competitor_price)}</td>
-                  <td>
-                    {signedDiff === null ? (
-                      <span className="price-delta price-delta--neutral">-</span>
-                    ) : signedDiff < 0 ? (
-                      <span className="price-delta price-delta--negative">
-                        🔴 -{formatPHP(String(Math.abs(signedDiff)))}
-                      </span>
-                    ) : (
-                      <span className="price-delta price-delta--positive">🟢 +{formatPHP(String(signedDiff))}</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="score-stack" title={`${competitiveness}%`}>
-                      <div className="score-meter">
-                        <div className="score-fill" style={{ width: `${competitiveness}%` }} />
+                  <tr key={row.product_id} title={row.name}>
+                    <td>
+                      <span className="sku-value">{row.sku}</span>
+                    </td>
+                    <td className="align-right">{formatPHP(row.store_price)}</td>
+                    <td className="align-right">{formatPHP(row.cheapest_competitor_price)}</td>
+                    <td>
+                      {signedDiff === null ? (
+                        <span className="price-delta price-delta--neutral">-</span>
+                      ) : signedDiff < 0 ? (
+                        <span className="price-delta price-delta--negative">
+                          🔴 -{formatPHP(String(Math.abs(signedDiff)))}
+                        </span>
+                      ) : (
+                        <span className="price-delta price-delta--positive">🟢 +{formatPHP(String(signedDiff))}</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="score-stack" title={`${competitiveness}%`}>
+                        <div className="score-meter">
+                          <div className="score-fill" style={{ width: `${competitiveness}%` }} />
+                        </div>
+                        <span className="score-label">{competitiveness}%</span>
                       </div>
-                      <span className="score-label">{competitiveness}%</span>
-                    </div>
-                  </td>
-                </tr>
+                    </td>
+                    {hasRowAction ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="row-action-btn"
+                          aria-label={`Open forecast for ${row.sku}`}
+                          onClick={() => onSelectProduct?.(row.product_id)}
+                        >
+                          Open
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
                 );
               })
             )}

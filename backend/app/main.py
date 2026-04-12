@@ -1,12 +1,14 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
+from app.api.routes_auth import router as auth_router
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_inventory import router as inventory_router
 from app.api.routes_prices import router as prices_router
 from app.api.routes_sales import router as sales_router
 from app.db.session import init_db
+from app.services.auth_service import require_admin
 
 
 def create_app() -> FastAPI:
@@ -32,10 +34,12 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(inventory_router)
-    app.include_router(sales_router)
-    app.include_router(dashboard_router)
-    app.include_router(prices_router)
+    protected_dependencies = [Depends(require_admin)]
+    app.include_router(auth_router)
+    app.include_router(inventory_router, dependencies=protected_dependencies)
+    app.include_router(sales_router, dependencies=protected_dependencies)
+    app.include_router(dashboard_router, dependencies=protected_dependencies)
+    app.include_router(prices_router, dependencies=protected_dependencies)
     return app
 
 

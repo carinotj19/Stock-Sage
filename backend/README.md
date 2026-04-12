@@ -29,6 +29,15 @@ Required Render environment variables:
 
 - `DATABASE_URL` (Neon URL using `postgresql+psycopg://...`)
 - `CORS_ALLOW_ORIGINS` (comma-separated, include your Vercel frontend URL)
+- `ADMIN_SESSION_SECRET` (long random value used to sign admin cookies)
+- `ADMIN_COOKIE_SECURE=true`
+- `ADMIN_COOKIE_SAMESITE=none` when the frontend and backend are on different hosted domains
+
+After migrations run, create the first admin user from a backend shell:
+
+```bash
+python -m app.cli.create_admin --username admin
+```
 
 Notes:
 

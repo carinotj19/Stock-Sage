@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { AdminLogin } from "./components/AdminLogin";
 import { ForecastItemModal } from "./components/ForecastItemModal";
 import { InventoryProductsTable } from "./components/InventoryProductsTable";
 import { LowStockTable } from "./components/LowStockTable";
@@ -22,11 +23,35 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 const ITEM_FORECAST_HISTORY_DAYS = 365;
 
+type AuthStatus = {
+  authenticated: boolean;
+  configured: boolean;
+  username: string | null;
+};
+
+type AuthState =
+  | { status: "checking" }
+  | { status: "authenticated"; username: string }
+  | { status: "anonymous" };
+
+const readApiError = async (response: Response) => {
+  const body = await response.text();
+  if (!body) return `${response.status} ${response.statusText}`;
+
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+  } catch {
+    return body;
+  }
+
+  return body;
+};
+
 const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, credentials: "include" });
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || `${response.status} ${response.statusText}`);
+    throw new Error(await readApiError(response));
   }
   return (await response.json()) as T;
 };
@@ -53,6 +78,9 @@ const App = () => {
     value === null ? "n/a" : `${value.toFixed(decimals)}${suffix}`;
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "inventory" | "transactions">("dashboard");
+  const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
@@ -122,6 +150,72 @@ const App = () => {
       minute: "2-digit"
     }).format(lastUpdatedAt)}`;
   })();
+
+  const clearDashboardData = () => {
+    setLowStock([]);
+    setStockoutRows([]);
+    setPriceRows([]);
+    setSalesTrend([]);
+    setProducts([]);
+    setSourceQualityRows([]);
+    setForecastReport(null);
+    setSelectedForecastProductId(null);
+    setSelectedForecastItem(null);
+    setApiError(null);
+    setReportError(null);
+    setActionMessage(null);
+    setLastUpdatedAt(null);
+    setIsLoading(false);
+  };
+
+  const checkAuth = async () => {
+    setLoginError(null);
+    try {
+      const status = await requestJson<AuthStatus>("/auth/me");
+      if (status.authenticated) {
+        setAuthState({ status: "authenticated", username: status.username ?? "admin" });
+        return;
+      }
+
+      setAuthState({ status: "anonymous" });
+      if (!status.configured) {
+        setLoginError("Admin login is not configured. Set ADMIN_SESSION_SECRET and create an admin user from the backend CLI.");
+      }
+    } catch (error) {
+      setAuthState({ status: "anonymous" });
+      setLoginError(`Cannot check admin session at ${API_BASE_URL}: ${String(error)}`);
+    }
+  };
+
+  const onAdminLogin = async (username: string, password: string) => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      const status = await requestJson<AuthStatus>("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      if (!status.authenticated) {
+        throw new Error("Admin login failed.");
+      }
+      setAuthState({ status: "authenticated", username: status.username ?? username });
+    } catch (error) {
+      setLoginError(`Sign in failed: ${String(error)}`);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const onLogout = async () => {
+    try {
+      await requestJson<AuthStatus>("/auth/logout", { method: "POST" });
+    } catch {
+      // Local state is cleared even if the session already expired server-side.
+    }
+    clearDashboardData();
+    setAuthState({ status: "anonymous" });
+  };
 
   const loadData = async () => {
     setIsLoading(true);
@@ -195,9 +289,15 @@ const App = () => {
   };
 
   useEffect(() => {
-    void loadData();
+    void checkAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated") return;
+    void loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authState.status]);
 
   useEffect(() => {
     if (selectedForecastProductId === null) return;
@@ -345,6 +445,18 @@ const App = () => {
     setIsForecastModalLoading(false);
   };
 
+  if (authState.status !== "authenticated") {
+    return (
+      <AdminLogin
+        apiBaseUrl={API_BASE_URL}
+        error={loginError}
+        isChecking={authState.status === "checking"}
+        isSubmitting={isLoggingIn}
+        onSubmit={onAdminLogin}
+      />
+    );
+  }
+
   return (
     <main className="dashboard-shell">
       <header className="hero">
@@ -382,8 +494,12 @@ const App = () => {
           <button className="refresh-btn" onClick={() => void loadData()}>
             Refresh Data
           </button>
+          <button className="secondary-btn" onClick={() => void onLogout()}>
+            Sign Out
+          </button>
         </div>
         <div className="meta-row">
+          <p className="meta">Admin: {authState.username}</p>
           <p className="meta">API: {API_BASE_URL}</p>
           <p className="meta">{lastUpdatedLabel}</p>
         </div>
