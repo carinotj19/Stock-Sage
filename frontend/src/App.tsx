@@ -4,6 +4,7 @@ import { ForecastItemModal } from "./components/ForecastItemModal";
 import { InventoryProductsTable } from "./components/InventoryProductsTable";
 import { LowStockTable } from "./components/LowStockTable";
 import { PriceComparisonTable } from "./components/PriceComparisonTable";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
 import type {
@@ -14,7 +15,8 @@ import type {
   PriceComparisonRow,
   ScraperSourceQualityRow,
   SalesTrendPoint,
-  StockoutRow
+  StockoutRow,
+  UserRole
 } from "./types";
 import "./styles.css";
 import type { InventoryProductUpdatePayload } from "./components/InventoryProductsTable";
@@ -27,11 +29,13 @@ type AuthStatus = {
   authenticated: boolean;
   configured: boolean;
   username: string | null;
+  display_name: string | null;
+  role: UserRole | null;
 };
 
 type AuthState =
   | { status: "checking" }
-  | { status: "authenticated"; username: string }
+  | { status: "authenticated"; username: string; displayName: string; role: UserRole }
   | { status: "anonymous" };
 
 const readApiError = async (response: Response) => {
@@ -77,7 +81,7 @@ const App = () => {
   const formatOptionalMetric = (value: number | null, decimals = 2, suffix = "") =>
     value === null ? "n/a" : `${value.toFixed(decimals)}${suffix}`;
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "inventory" | "transactions">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "inventory" | "transactions" | "settings">("dashboard");
   const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
@@ -173,7 +177,13 @@ const App = () => {
     try {
       const status = await requestJson<AuthStatus>("/auth/me");
       if (status.authenticated) {
-        setAuthState({ status: "authenticated", username: status.username ?? "admin" });
+        const username = status.username ?? "admin";
+        setAuthState({
+          status: "authenticated",
+          username,
+          displayName: status.display_name ?? username,
+          role: status.role ?? "admin"
+        });
         return;
       }
 
@@ -199,7 +209,14 @@ const App = () => {
       if (!status.authenticated) {
         throw new Error("Admin login failed.");
       }
-      setAuthState({ status: "authenticated", username: status.username ?? username });
+      const authenticatedUsername = status.username ?? username;
+      setAuthState({
+        status: "authenticated",
+        username: authenticatedUsername,
+        displayName: status.display_name ?? authenticatedUsername,
+        role: status.role ?? "admin"
+      });
+      setActiveTab("dashboard");
     } catch (error) {
       setLoginError(`Sign in failed: ${String(error)}`);
     } finally {
@@ -214,6 +231,7 @@ const App = () => {
       // Local state is cleared even if the session already expired server-side.
     }
     clearDashboardData();
+    setActiveTab("dashboard");
     setAuthState({ status: "anonymous" });
   };
 
@@ -298,6 +316,12 @@ const App = () => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authState.status]);
+
+  useEffect(() => {
+    if (authState.status === "authenticated" && authState.role !== "admin" && activeTab === "settings") {
+      setActiveTab("dashboard");
+    }
+  }, [activeTab, authState]);
 
   useEffect(() => {
     if (selectedForecastProductId === null) return;
@@ -483,6 +507,14 @@ const App = () => {
             >
               💳 Transactions
             </button>
+            {authState.role === "admin" ? (
+              <button
+                className={activeTab === "settings" ? "tab active" : "tab"}
+                onClick={() => setActiveTab("settings")}
+              >
+                Settings
+              </button>
+            ) : null}
           </div>
           <button
             className="secondary-btn"
@@ -499,7 +531,10 @@ const App = () => {
           </button>
         </div>
         <div className="meta-row">
-          <p className="meta">Admin: {authState.username}</p>
+          <p className="meta account-meta">
+            <span>{authState.displayName}</span>
+            <span className={`role-pill role-pill--${authState.role}`}>{authState.role}</span>
+          </p>
           <p className="meta">API: {API_BASE_URL}</p>
           <p className="meta">{lastUpdatedLabel}</p>
         </div>
@@ -860,6 +895,8 @@ const App = () => {
           </section>
         </section>
       ) : null}
+
+      {activeTab === "settings" && authState.role === "admin" ? <SettingsPanel requestJson={requestJson} /> : null}
 
       <ForecastItemModal
         isOpen={selectedForecastProductId !== null}

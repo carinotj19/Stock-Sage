@@ -36,6 +36,9 @@ def _build_auth_client(monkeypatch, seed_admin: bool = True, active: bool = True
             db.add(
                 AdminUser(
                     username="admin",
+                    display_name="Admin User",
+                    email="admin@example.com",
+                    role="admin",
                     password_hash=hash_admin_password("correct-password"),
                     active=active,
                 )
@@ -82,10 +85,22 @@ def test_admin_login_sets_session_cookie(monkeypatch) -> None:
         me_response = client.get("/auth/me")
 
         assert login_response.status_code == 200
-        assert login_response.json() == {"authenticated": True, "configured": True, "username": "admin"}
+        assert login_response.json() == {
+            "authenticated": True,
+            "configured": True,
+            "username": "admin",
+            "display_name": "Admin User",
+            "role": "admin",
+        }
         assert client.cookies.get(ADMIN_SESSION_COOKIE)
         assert me_response.status_code == 200
-        assert me_response.json() == {"authenticated": True, "configured": True, "username": "admin"}
+        assert me_response.json() == {
+            "authenticated": True,
+            "configured": True,
+            "username": "admin",
+            "display_name": "Admin User",
+            "role": "admin",
+        }
     finally:
         _cleanup_auth_client(app, engine)
 
@@ -110,7 +125,13 @@ def test_auth_status_reports_missing_admin_user(monkeypatch) -> None:
         response = client.get("/auth/me")
 
         assert response.status_code == 200
-        assert response.json() == {"authenticated": False, "configured": False, "username": None}
+        assert response.json() == {
+            "authenticated": False,
+            "configured": False,
+            "username": None,
+            "display_name": None,
+            "role": None,
+        }
     finally:
         _cleanup_auth_client(app, engine)
 
@@ -124,8 +145,88 @@ def test_inactive_admin_cannot_login(monkeypatch) -> None:
             json={"username": "admin", "password": "correct-password"},
         )
 
-        assert status_response.json() == {"authenticated": False, "configured": False, "username": None}
+        assert status_response.json() == {
+            "authenticated": False,
+            "configured": False,
+            "username": None,
+            "display_name": None,
+            "role": None,
+        }
         assert login_response.status_code == 503
         assert login_response.json()["detail"] == "Admin authentication is not configured."
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
+def test_admin_can_create_staff_account_and_read_audit_logs(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(monkeypatch)
+    try:
+        login_response = client.post(
+            "/auth/login",
+            json={"username": "admin", "password": "correct-password"},
+        )
+        create_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "staff",
+                "display_name": "Staff Member",
+                "email": "staff@example.com",
+                "role": "staff",
+                "password": "staff-password",
+            },
+        )
+        accounts_response = client.get("/settings/accounts")
+        logs_response = client.get("/settings/audit-logs")
+
+        assert login_response.status_code == 200
+        assert create_response.status_code == 201
+        created_account = create_response.json()
+        assert created_account["username"] == "staff"
+        assert created_account["display_name"] == "Staff Member"
+        assert created_account["email"] == "staff@example.com"
+        assert created_account["role"] == "staff"
+        assert created_account["status"] == "active"
+        assert "password" not in created_account
+
+        assert accounts_response.status_code == 200
+        usernames = {account["username"] for account in accounts_response.json()}
+        assert {"admin", "staff"}.issubset(usernames)
+
+        assert logs_response.status_code == 200
+        audit_actions = [entry["action"] for entry in logs_response.json()]
+        assert "account.created" in audit_actions
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
+def test_staff_can_use_dashboard_routes_but_cannot_manage_settings(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(monkeypatch)
+    try:
+        client.post("/auth/login", json={"username": "admin", "password": "correct-password"})
+        create_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "staff",
+                "display_name": "Staff Member",
+                "email": "staff@example.com",
+                "role": "staff",
+                "password": "staff-password",
+            },
+        )
+        assert create_response.status_code == 201
+        client.post("/auth/logout")
+
+        staff_login_response = client.post(
+            "/auth/login",
+            json={"username": "staff", "password": "staff-password"},
+        )
+        products_response = client.get("/products")
+        settings_response = client.get("/settings/accounts")
+
+        assert staff_login_response.status_code == 200
+        assert staff_login_response.json()["role"] == "staff"
+        assert products_response.status_code == 200
+        assert settings_response.status_code == 403
+        assert settings_response.json()["detail"] == "Admin role required."
     finally:
         _cleanup_auth_client(app, engine)

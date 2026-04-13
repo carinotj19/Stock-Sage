@@ -9,6 +9,7 @@ def test_core_tables_exist() -> None:
     table_names = set(inspector.get_table_names())
     expected = {
         "admin_users",
+        "audit_logs",
         "suppliers",
         "products",
         "inventory_balance",

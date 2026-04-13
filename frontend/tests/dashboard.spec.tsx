@@ -52,7 +52,7 @@ describe("Dashboard rendering", () => {
           ok: true,
           json: async () =>
             url.includes("/auth/me")
-              ? { authenticated: true, configured: true, username: "admin" }
+              ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
               : []
         };
       })
@@ -68,7 +68,7 @@ describe("Dashboard rendering", () => {
           ok: true,
           json: async () =>
             url.includes("/auth/me")
-              ? { authenticated: false, configured: true, username: null }
+              ? { authenticated: false, configured: true, username: null, display_name: null, role: null }
               : []
         };
       })
@@ -128,7 +128,7 @@ describe("Dashboard rendering", () => {
       if (url.includes("/auth/me")) {
         return {
           ok: true,
-          json: async () => ({ authenticated: true, configured: true, username: "admin" })
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
         };
       }
 
@@ -210,7 +210,7 @@ describe("Dashboard rendering", () => {
       if (url.includes("/auth/me")) {
         return {
           ok: true,
-          json: async () => ({ authenticated: true, configured: true, username: "admin" })
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
         };
       }
 
@@ -249,5 +249,137 @@ describe("Dashboard rendering", () => {
     });
     expect(historyWindowMetric.closest("article")).toHaveTextContent("365 days");
     expect(screen.queryByLabelText("History range")).not.toBeInTheDocument();
+  });
+
+  it("shows admin settings with account creation and audit logs", async () => {
+    const accounts = [
+      {
+        id: 1,
+        username: "admin",
+        display_name: "Admin User",
+        email: "admin@example.com",
+        role: "admin",
+        status: "active",
+        created_at: "2026-01-15T00:00:00Z",
+        last_login_at: null
+      }
+    ];
+    const auditLogs = [
+      {
+        id: 1,
+        actor_username: "admin",
+        action: "account.created",
+        target_type: "account",
+        target_id: 2,
+        message: "Created staff account staff.",
+        created_at: "2026-01-15T00:00:00Z"
+      }
+    ];
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (url.endsWith("/settings/accounts") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body));
+        accounts.push({
+          id: 2,
+          username: payload.username,
+          display_name: payload.display_name,
+          email: payload.email,
+          role: payload.role,
+          status: "active",
+          created_at: "2026-01-16T00:00:00Z",
+          last_login_at: null
+        });
+        return {
+          ok: true,
+          json: async () => accounts[1]
+        };
+      }
+
+      if (url.includes("/settings/accounts")) {
+        return {
+          ok: true,
+          json: async () => accounts
+        };
+      }
+
+      if (url.includes("/settings/audit-logs")) {
+        return {
+          ok: true,
+          json: async () => auditLogs
+        };
+      }
+
+      if (url.includes("/settings/system")) {
+        return {
+          ok: true,
+          json: async () => ({ auth_enabled: true, active_accounts: 1, admin_accounts: 1, staff_accounts: 0 })
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /settings/i }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /system/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /accounts/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /audit logs/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /accounts/i }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "staff" } });
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Staff Member" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "staff@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "staff-password" } });
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "staff" } });
+    fireEvent.click(screen.getByRole("button", { name: /create account/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/accounts"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    expect(await screen.findByText("Staff Member")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /audit logs/i }));
+    expect(await screen.findByText("Created staff account staff.")).toBeInTheDocument();
+  });
+
+  it("hides the settings tab for staff accounts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "staff", display_name: "Staff Member", role: "staff" }
+              : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Low Stock Alerts")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /settings/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Staff Member")).toBeInTheDocument();
   });
 });

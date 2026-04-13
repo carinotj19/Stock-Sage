@@ -7,8 +7,9 @@ from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_inventory import router as inventory_router
 from app.api.routes_prices import router as prices_router
 from app.api.routes_sales import router as sales_router
+from app.api.routes_settings import router as settings_router
 from app.db.session import init_db
-from app.services.auth_service import require_admin
+from app.services.auth_service import require_authenticated_user
 
 
 def create_app() -> FastAPI:
@@ -34,8 +35,9 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    protected_dependencies = [Depends(require_admin)]
+    protected_dependencies = [Depends(require_authenticated_user)]
     app.include_router(auth_router)
+    app.include_router(settings_router)
     app.include_router(inventory_router, dependencies=protected_dependencies)
     app.include_router(sales_router, dependencies=protected_dependencies)
     app.include_router(dashboard_router, dependencies=protected_dependencies)

@@ -10,6 +10,7 @@ from app.services.auth_service import (
     get_cookie_samesite,
     get_cookie_secure,
     get_request_session_admin,
+    get_user_display_name,
     get_session_ttl_seconds,
     is_auth_configured,
     is_auth_disabled,
@@ -27,16 +28,28 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _auth_status_for_account(account) -> AuthStatus:
+    return AuthStatus(
+        authenticated=True,
+        configured=True,
+        username=account.username,
+        display_name=get_user_display_name(account),
+        role=account.role,
+    )
+
+
 @router.get("/me", response_model=AuthStatus)
 def get_auth_status(request: Request, db: Session = Depends(get_db)) -> AuthStatus:
     if is_auth_disabled():
-        return AuthStatus(authenticated=True, configured=True, username="admin")
+        return AuthStatus(authenticated=True, configured=True, username="admin", display_name="Admin", role="admin")
 
     if not is_auth_configured(db):
         return AuthStatus(authenticated=False, configured=False)
 
     admin = get_request_session_admin(request, db)
-    return AuthStatus(authenticated=admin is not None, configured=True, username=admin.username if admin else None)
+    if admin is None:
+        return AuthStatus(authenticated=False, configured=True)
+    return _auth_status_for_account(admin)
 
 
 @router.post("/login", response_model=AuthStatus)
@@ -75,7 +88,7 @@ def login(
         max_age=get_session_ttl_seconds(),
         path="/",
     )
-    return AuthStatus(authenticated=True, configured=True, username=admin.username)
+    return _auth_status_for_account(admin)
 
 
 @router.post("/logout", response_model=AuthStatus)

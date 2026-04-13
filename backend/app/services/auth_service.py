@@ -8,10 +8,10 @@ import time
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import AdminUser
+from app.db.models import AdminUser, AuditLog
 from app.db.session import get_db
 
 
@@ -53,6 +53,15 @@ def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
+def normalize_optional_email(email: str | None) -> str | None:
+    normalized = email.strip().lower() if email else ""
+    return normalized or None
+
+
+def get_user_display_name(user: AdminUser) -> str:
+    return user.display_name or user.username
+
+
 def hash_admin_password(password: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS)
@@ -82,16 +91,20 @@ def verify_admin_password(password: str, password_hash: str) -> bool:
     return hmac.compare_digest(actual_digest, expected_digest)
 
 
-def get_active_admin_by_username(db: Session, username: str) -> AdminUser | None:
+def get_active_account_by_login(db: Session, username: str) -> AdminUser | None:
+    normalized_login = normalize_username(username)
     return db.scalars(
         select(AdminUser).where(
-            AdminUser.username == normalize_username(username),
+            or_(
+                AdminUser.username == normalized_login,
+                func.lower(AdminUser.email) == normalized_login,
+            ),
             AdminUser.active.is_(True),
         )
     ).first()
 
 
-def has_active_admin(db: Session) -> bool:
+def has_active_account(db: Session) -> bool:
     return (
         db.scalars(select(AdminUser.id).where(AdminUser.active.is_(True)).limit(1)).first()
         is not None
@@ -99,7 +112,7 @@ def has_active_admin(db: Session) -> bool:
 
 
 def is_auth_configured(db: Session) -> bool:
-    return bool(os.getenv("ADMIN_SESSION_SECRET")) and has_active_admin(db)
+    return bool(os.getenv("ADMIN_SESSION_SECRET")) and has_active_account(db)
 
 
 def _get_session_secret() -> bytes:
@@ -124,7 +137,7 @@ def _sign(value: str) -> str:
 
 
 def verify_admin_credentials(db: Session, username: str, password: str) -> AdminUser | None:
-    admin = get_active_admin_by_username(db, username)
+    admin = get_active_account_by_login(db, username)
     if admin is None or not verify_admin_password(password, admin.password_hash):
         return None
     return admin
@@ -174,15 +187,15 @@ def get_session_admin(db: Session, token: str | None) -> AdminUser | None:
 
 def get_request_session_admin(request: Request, db: Session) -> AdminUser | None:
     if is_auth_disabled():
-        return AdminUser(id=0, username="admin", password_hash="", active=True)
+        return AdminUser(id=0, username="admin", display_name="Admin", role="admin", password_hash="", active=True)
     if not is_auth_configured(db):
         return None
     return get_session_admin(db, request.cookies.get(ADMIN_SESSION_COOKIE))
 
 
-def require_admin(request: Request, db: Session = Depends(get_db)) -> None:
+def require_authenticated_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
     if is_auth_disabled():
-        return
+        return AdminUser(id=0, username="admin", display_name="Admin", role="admin", password_hash="", active=True)
 
     if not is_auth_configured(db):
         raise HTTPException(
@@ -190,17 +203,59 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> None:
             detail="Admin authentication is not configured.",
         )
 
-    if get_request_session_admin(request, db) is None:
+    account = get_request_session_admin(request, db)
+    if account is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Admin login required.",
         )
+    return account
+
+
+def require_admin(request: Request, db: Session = Depends(get_db)) -> AdminUser:
+    account = require_authenticated_user(request, db)
+    if account.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required.",
+        )
+    return account
 
 
 def record_admin_login(db: Session, admin: AdminUser) -> None:
     admin.last_login_at = datetime.now(UTC)
     db.add(admin)
+    db.add(
+        AuditLog(
+            actor_user_id=admin.id,
+            actor_username=admin.username,
+            action="auth.login",
+            target_type="account",
+            target_id=admin.id,
+            message=f"{get_user_display_name(admin)} signed in.",
+        )
+    )
     db.commit()
+
+
+def record_audit_log(
+    db: Session,
+    actor: AdminUser,
+    action: str,
+    target_type: str,
+    target_id: int | None,
+    message: str,
+) -> None:
+    db.add(
+        AuditLog(
+            actor_user_id=actor.id if actor.id else None,
+            actor_username=actor.username,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            message=message,
+        )
+    )
 
 
 def is_login_allowed(client_key: str) -> bool:

@@ -157,3 +157,35 @@ export type ItemForecastDetail = {
   demand_points: ItemDemandPoint[];
   price_analysis: ItemPriceAnalysis;
 };
+
+export type UserRole = "admin" | "staff";
+
+export type AccountRow = {
+  id: number;
+  username: string;
+  display_name: string;
+  email: string | null;
+  role: UserRole;
+  status: "active" | "inactive";
+  created_at: string;
+  last_login_at: string | null;
+};
+
+export type SystemSettings = {
+  auth_enabled: boolean;
+  configured: boolean;
+  active_accounts: number;
+  admin_accounts: number;
+  staff_accounts: number;
+  session_ttl_seconds: number;
+};
+
+export type AuditLogRow = {
+  id: number;
+  actor_username: string;
+  action: string;
+  target_type: string;
+  target_id: number | null;
+  message: string;
+  created_at: string;
+};
