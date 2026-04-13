@@ -51,10 +51,7 @@ playwright-report/
 test-results/
 
 # Internal-only/generated content
-docs/*
-!docs/
-!docs/api-contract.md
-!docs/consultation-guide.md
+docs/
 data/
 
 # Local scratch files

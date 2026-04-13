@@ -131,14 +131,6 @@ npm test
 
 Backend example env lives in [backend/.env.example](./backend/.env.example).
 
-## Important Docs
-
-- [Local runbook](./docs/runbook-local.md)
-- [Thesis alignment checklist](./docs/thesis-alignment-checklist.md)
-- [Thesis architecture traceability](./docs/thesis-architecture-traceability.md)
-- [Forecast accuracy action plan](./docs/thesis-model-accuracy-actions.md)
-- [Usability evaluation plan](./docs/usability-evaluation-plan.md)
-
 ## Deployment
 
 - Frontend: Vercel
