@@ -50,8 +50,11 @@ frontend/coverage/
 playwright-report/
 test-results/
 
-# Internal-only content
-docs/
+# Internal-only/generated content
+docs/*
+!docs/
+!docs/api-contract.md
+!docs/consultation-guide.md
 data/
 
 # Local scratch files

@@ -134,12 +134,10 @@ Backend example env lives in [backend/.env.example](./backend/.env.example).
 ## Important Docs
 
 - [Local runbook](./docs/runbook-local.md)
-- [API contract](./docs/api-contract.md)
 - [Thesis alignment checklist](./docs/thesis-alignment-checklist.md)
 - [Thesis architecture traceability](./docs/thesis-architecture-traceability.md)
 - [Forecast accuracy action plan](./docs/thesis-model-accuracy-actions.md)
 - [Usability evaluation plan](./docs/usability-evaluation-plan.md)
-- [Manuscript proposal PDF](./docs/N%20SUMTECH%20CIT6%20Manuscript%20Proposal%20.pdf)
 
 ## Deployment
 
