@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,7 @@ from app.services.dashboard_service import DashboardService
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/low-stock", response_model=list[LowStockRow])
@@ -67,6 +70,12 @@ def get_forecast_report(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("forecast_report_failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Forecast report failed on the backend. Check Render logs for forecast_report_failed.",
+        ) from exc
 
 
 @router.get("/forecast-report/compare", response_model=ForecastRunComparisonResponse)
