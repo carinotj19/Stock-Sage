@@ -53,7 +53,17 @@ const readApiError = async (response: Response) => {
 };
 
 const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, credentials: "include" });
+  const requestUrl = `${API_BASE_URL}${path}`;
+  let response: Response;
+
+  try {
+    response = await fetch(requestUrl, { ...init, credentials: "include" });
+  } catch (error) {
+    throw new Error(
+      `Cannot reach API at ${API_BASE_URL}. Check that the backend URL is live and CORS allows this frontend. Original error: ${String(error)}`
+    );
+  }
+
   if (!response.ok) {
     throw new Error(await readApiError(response));
   }

@@ -89,6 +89,33 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
+  it("shows an actionable API connectivity error when forecast report fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/dashboard/forecast-report")) {
+          throw new TypeError("Failed to fetch");
+        }
+
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
+              : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /generate forecast report/i }));
+
+    expect(await screen.findByText(/Cannot reach API at http:\/\/localhost:8000/)).toBeInTheDocument();
+    expect(screen.getByText(/Check that the backend URL is live and CORS allows this frontend/)).toBeInTheDocument();
+  });
+
   it("renders the add product category field as a dropdown", async () => {
     render(<App />);
 
