@@ -26,6 +26,7 @@ from app.ml.model_registry import CandidateScore
 from app.ml.predict import (
     ForecastDataQuality,
     estimate_censored_sales_dates,
+    filter_stock_movements_on_or_before,
     forecast_product_daily_units_with_diagnostics,
 )
 from app.services.reorder_service import ReorderService
@@ -652,9 +653,7 @@ def _lead_time_operational_backtest(
 
         train_stock_movements = stock_movements
         if not stock_movements.empty and "occurred_at" in stock_movements.columns:
-            cutoff = pd.to_datetime(train["date"]).max()
-            movement_dates = pd.to_datetime(stock_movements["occurred_at"]).dt.normalize()
-            train_stock_movements = stock_movements.loc[movement_dates <= cutoff].copy()
+            train_stock_movements = filter_stock_movements_on_or_before(stock_movements, train["date"])
 
         backtest_result = forecast_product_daily_units_with_diagnostics(
             train,

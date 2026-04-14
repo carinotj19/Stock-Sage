@@ -37,6 +37,7 @@ from app.ml.predict import (
     MIN_NON_ZERO_DAYS,
     MIN_NON_ZERO_RATIO,
     estimate_censored_sales_dates,
+    filter_stock_movements_on_or_before,
     forecast_product_daily_units_with_diagnostics,
 )
 from app.schemas.dashboard import (
@@ -589,9 +590,7 @@ class DashboardService:
             )
             train_stock_movements = stock_movements
             if not stock_movements.empty and "occurred_at" in stock_movements.columns:
-                cutoff = pd.to_datetime(train["date"]).max()
-                movement_dates = pd.to_datetime(stock_movements["occurred_at"]).dt.normalize()
-                train_stock_movements = stock_movements.loc[movement_dates <= cutoff].copy()
+                train_stock_movements = filter_stock_movements_on_or_before(stock_movements, train["date"])
 
             (
                 lead_time_wmape,

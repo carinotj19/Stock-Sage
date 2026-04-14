@@ -193,6 +193,33 @@ def _to_dense_daily_series(sales_history: pd.DataFrame) -> pd.Series:
     return dense
 
 
+def normalize_to_naive_utc_dates(values: pd.Series) -> pd.Series:
+    return pd.to_datetime(values, errors="coerce", utc=True).dt.tz_localize(None).dt.normalize()
+
+
+def filter_stock_movements_on_or_before(stock_movements: pd.DataFrame, cutoff_dates: pd.Series) -> pd.DataFrame:
+    if stock_movements.empty:
+        return stock_movements
+
+    if "occurred_at" in stock_movements.columns:
+        date_column = "occurred_at"
+    elif "date" in stock_movements.columns:
+        date_column = "date"
+    else:
+        date_column = None
+
+    if date_column is None:
+        return stock_movements
+
+    normalized_cutoff_dates = normalize_to_naive_utc_dates(cutoff_dates)
+    cutoff = normalized_cutoff_dates.max()
+    if pd.isna(cutoff):
+        return stock_movements.iloc[0:0].copy()
+
+    movement_dates = normalize_to_naive_utc_dates(stock_movements[date_column])
+    return stock_movements.loc[movement_dates.notna() & (movement_dates <= cutoff)].copy()
+
+
 def _cap_outliers(series: pd.Series) -> tuple[pd.Series, int]:
     clean = series.astype(float).clip(lower=0.0)
     if len(clean) < 7:
@@ -214,9 +241,9 @@ def _normalize_stock_movements(stock_movements: pd.DataFrame | None) -> pd.DataF
 
     frame = stock_movements.copy()
     if "date" in frame.columns:
-        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        frame["date"] = normalize_to_naive_utc_dates(frame["date"])
     elif "occurred_at" in frame.columns:
-        frame["date"] = pd.to_datetime(frame["occurred_at"]).dt.normalize()
+        frame["date"] = normalize_to_naive_utc_dates(frame["occurred_at"])
     else:
         frame["date"] = pd.NaT
 

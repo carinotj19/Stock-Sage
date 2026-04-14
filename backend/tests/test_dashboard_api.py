@@ -3,6 +3,7 @@ from collections.abc import Generator
 import json
 from pathlib import Path
 
+import pandas as pd
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -297,6 +298,76 @@ def test_item_forecast_defaults_to_up_to_365_days_of_dense_history() -> None:
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+
+
+def test_forecast_quality_handles_timezone_aware_stock_movement_dates(monkeypatch) -> None:
+    from app.ml.model_registry import CandidateScore
+    from app.ml.predict import ForecastComputationResult, ForecastDataQuality, ForecastDiagnostics
+    from app.services.dashboard_service import DashboardService
+
+    service = DashboardService(db=None)  # type: ignore[arg-type]
+    start_date = date.today() - timedelta(days=45)
+    history = pd.DataFrame(
+        {
+            "date": [start_date + timedelta(days=offset) for offset in range(45)],
+            "units": [float(2 + (offset % 3)) for offset in range(45)],
+        }
+    )
+    stock_movements = pd.DataFrame(
+        [
+            {
+                "occurred_at": pd.Timestamp(start_date + timedelta(days=5), tz="GMT"),
+                "qty_delta": 20,
+                "movement_type": "adjustment",
+            },
+            {
+                "occurred_at": pd.Timestamp(start_date + timedelta(days=42), tz="GMT"),
+                "qty_delta": 10,
+                "movement_type": "adjustment",
+            },
+        ]
+    )
+    forecast_dates = pd.date_range(start_date + timedelta(days=45), periods=7, freq="D").date
+
+    def fake_forecast(*args, **kwargs) -> ForecastComputationResult:  # noqa: ANN002, ANN003, ARG001
+        quality = ForecastDataQuality(
+            status="ok",
+            history_days=38,
+            non_zero_days=38,
+            non_zero_ratio=1.0,
+            capped_outlier_days=0,
+            suspected_stockout_days=0,
+            data_tier="mature",
+            effective_history_days=38,
+        )
+        score = CandidateScore("NaiveMA", mae=1.0, mape_pct=10.0, wmape_pct=10.0, windows_evaluated=1)
+        return ForecastComputationResult(
+            forecast_frame=pd.DataFrame(
+                {
+                    "forecast_date": forecast_dates,
+                    "predicted_units": [3.0] * 7,
+                    "lower_ci": [2.0] * 7,
+                    "upper_ci": [4.0] * 7,
+                }
+            ),
+            diagnostics=ForecastDiagnostics(
+                selected_model_name="NaiveMA",
+                selected_score=score,
+                candidate_scores=[score],
+                quality=quality,
+            ),
+        )
+
+    monkeypatch.setattr(service, "_load_sales_history_dense", lambda _product_id: history.copy())
+    monkeypatch.setattr(service, "_load_stock_movements", lambda _product_id: stock_movements.copy())
+    monkeypatch.setattr(service, "_lead_time_days_for_product", lambda _product_id: 3)
+    monkeypatch.setattr("app.services.dashboard_service.forecast_product_daily_units_with_diagnostics", fake_forecast)
+    monkeypatch.setattr("app.services.dashboard_service._lead_time_operational_backtest", lambda *args: (10.0, 15.0, 1, 1))
+
+    metrics = service._evaluate_forecast_quality([1], evaluation_days=7)
+
+    assert metrics.evaluation_days == 7
+    assert metrics.evaluated_skus == 1
 
 
 def test_scraper_source_quality_uses_last_run_at_and_runtime_state_for_zero_row_standard_sources() -> None:

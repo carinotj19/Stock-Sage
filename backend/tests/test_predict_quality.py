@@ -9,6 +9,7 @@ from app.ml.predict import (
     _cap_forecast_spikes,
     _prefer_raw_for_mature_series,
     estimate_censored_sales_dates,
+    filter_stock_movements_on_or_before,
     forecast_product_daily_units_with_diagnostics,
 )
 
@@ -181,6 +182,29 @@ def test_stockout_censoring_uses_restock_signal_for_short_zero_runs() -> None:
     assert len(censored_dates) == 3
     assert pd.Timestamp(datetime(2026, 1, 6)).normalize() in censored_dates
     assert pd.Timestamp(datetime(2026, 1, 8)).normalize() in censored_dates
+
+
+def test_stock_movement_cutoff_handles_timezone_aware_dates() -> None:
+    stock_movements = pd.DataFrame(
+        [
+            {
+                "occurred_at": pd.Timestamp("2026-01-03 08:30:00", tz="GMT"),
+                "qty_delta": 10,
+                "movement_type": "adjustment",
+            },
+            {
+                "occurred_at": pd.Timestamp("2026-01-09 08:30:00", tz="GMT"),
+                "qty_delta": 5,
+                "movement_type": "adjustment",
+            },
+        ]
+    )
+    cutoff_dates = pd.Series([datetime(2026, 1, 1), datetime(2026, 1, 7)])
+
+    filtered = filter_stock_movements_on_or_before(stock_movements, cutoff_dates)
+
+    assert len(filtered) == 1
+    assert filtered.iloc[0]["qty_delta"] == 10
 
 
 def test_stockout_censoring_handles_terminal_zero_runs_with_strong_recent_demand() -> None:
