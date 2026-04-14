@@ -4,9 +4,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.models import Base, InventoryBalance, SalesTransaction, StockMovement
+from app.db.models import AdminUser, Base, InventoryBalance, SalesTransaction, StockMovement
 from app.db.session import get_db
 from app.main import create_app
+from app.services.auth_service import clear_login_attempts, hash_admin_password
 
 
 TEST_DATABASE_URL = "sqlite:///./data/test_sales_posting.db"
@@ -100,6 +101,77 @@ def test_sales_posting_is_atomic_with_stock_movements() -> None:
 
         transaction_count = db.scalar(select(func.count()).select_from(SalesTransaction))
         assert transaction_count == 1
+
+    app.dependency_overrides.clear()
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
+def test_authenticated_sales_posting_does_not_conflict_with_auth_session_transaction(monkeypatch) -> None:
+    monkeypatch.setenv("STOCK_SAGE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-session-secret")
+    clear_login_attempts("testclient")
+
+    engine = _build_test_engine()
+    TestingSessionLocal = _build_test_session(engine)
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as db:
+        db.add(
+            AdminUser(
+                username="admin",
+                display_name="Admin User",
+                email="admin@example.com",
+                role="admin",
+                password_hash=hash_admin_password("correct-password"),
+                active=True,
+            )
+        )
+        db.commit()
+
+    app = create_app()
+
+    def override_get_db() -> Generator[Session, None, None]:
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    login_resp = client.post("/auth/login", json={"username": "admin", "password": "correct-password"})
+    supplier_resp = client.post(
+        "/suppliers",
+        json={"name": "Authenticated Supplier", "lead_time_days_default": 4},
+    )
+    product_resp = client.post(
+        "/products",
+        json={
+            "sku": "SKU-AUTH-SALES-1",
+            "name": "Authenticated Sale Item",
+            "supplier_id": supplier_resp.json()["id"],
+            "cost_price": "1.00",
+            "sell_price": "2.00",
+            "initial_stock": 5,
+        },
+    )
+    sale_resp = client.post(
+        "/sales",
+        json={
+            "receipt_no": "AUTH-RCPT-001",
+            "payment_method": "cash",
+            "items": [{"product_id": product_resp.json()["id"], "qty": 2}],
+        },
+    )
+
+    assert login_resp.status_code == 200
+    assert supplier_resp.status_code == 200
+    assert product_resp.status_code == 200
+    assert sale_resp.status_code == 200
+    assert sale_resp.json()["total_amount"] == "4.00"
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
