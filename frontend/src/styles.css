@@ -828,6 +828,10 @@ tbody tr:hover {
   font-size: 0.8rem;
 }
 
+.table-danger-btn {
+  align-self: center;
+}
+
 .panel-wide {
   grid-column: 1 / -1;
 }
@@ -959,13 +963,15 @@ tbody tr:hover {
 
 .settings-form-panel,
 .settings-table-panel,
-.settings-audit-panel {
+.settings-audit-panel,
+.settings-recycle-panel {
   min-height: 0;
 }
 
 .settings-form-panel h3,
 .settings-table-panel h3,
-.settings-audit-panel h3 {
+.settings-audit-panel h3,
+.settings-recycle-panel h3 {
   margin: 0 0 0.8rem;
 }
 

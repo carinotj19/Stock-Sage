@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
-import type { AccountRow, AuditLogRow, SystemSettings, UserRole } from "../types";
+import type { AccountRow, AuditLogRow, ProductRow, SystemSettings, UserRole } from "../types";
 
 type RequestJson = <T>(path: string, init?: RequestInit) => Promise<T>;
-type SettingsTab = "system" | "accounts" | "audit";
+type SettingsTab = "system" | "accounts" | "audit" | "recycle";
 
 type SettingsPanelProps = {
+  onProductsChanged?: () => Promise<void>;
   requestJson: RequestJson;
 };
 
@@ -27,31 +28,37 @@ const formatDate = (value: string | null) => {
   }).format(new Date(value));
 };
 
-export const SettingsPanel = ({ requestJson }: SettingsPanelProps) => {
+export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelProps) => {
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>("system");
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(null);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
+  const [recycledProducts, setRecycledProducts] = useState<ProductRow[]>([]);
   const [accountForm, setAccountForm] = useState(emptyAccountForm);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [isLoadingSettings, setIsLoadingSettings] = useState<boolean>(true);
   const [isCreatingAccount, setIsCreatingAccount] = useState<boolean>(false);
+  const [restoringProductId, setRestoringProductId] = useState<number | null>(null);
 
   const loadSettings = async () => {
     setIsLoadingSettings(true);
     setSettingsError(null);
-    const [systemResult, accountsResult, auditLogsResult] = await Promise.allSettled([
+    const [systemResult, accountsResult, auditLogsResult, recycledProductsResult] = await Promise.allSettled([
       requestJson<SystemSettings>("/settings/system"),
       requestJson<AccountRow[]>("/settings/accounts"),
-      requestJson<AuditLogRow[]>("/settings/audit-logs")
+      requestJson<AuditLogRow[]>("/settings/audit-logs"),
+      requestJson<ProductRow[]>("/settings/recycle-bin/products")
     ]);
 
     if (systemResult.status === "fulfilled") setSystemSettings(systemResult.value);
     if (accountsResult.status === "fulfilled") setAccounts(accountsResult.value);
     if (auditLogsResult.status === "fulfilled") setAuditLogs(auditLogsResult.value);
+    if (recycledProductsResult.status === "fulfilled") setRecycledProducts(recycledProductsResult.value);
 
-    const failedResult = [systemResult, accountsResult, auditLogsResult].find((result) => result.status === "rejected");
+    const failedResult = [systemResult, accountsResult, auditLogsResult, recycledProductsResult].find(
+      (result) => result.status === "rejected"
+    );
     if (failedResult?.status === "rejected") {
       setSettingsError(`Unable to load settings: ${String(failedResult.reason)}`);
     }
@@ -99,6 +106,22 @@ export const SettingsPanel = ({ requestJson }: SettingsPanelProps) => {
     }
   };
 
+  const onRestoreProduct = async (product: ProductRow) => {
+    setSettingsMessage(null);
+    setSettingsError(null);
+    setRestoringProductId(product.id);
+    try {
+      await requestJson<ProductRow>(`/settings/recycle-bin/products/${product.id}/restore`, { method: "POST" });
+      setSettingsMessage("Product restored.");
+      await loadSettings();
+      await onProductsChanged?.();
+    } catch (error) {
+      setSettingsError(`Restore product failed: ${String(error)}`);
+    } finally {
+      setRestoringProductId(null);
+    }
+  };
+
   return (
     <section className="settings-page" aria-labelledby="settings-title">
       <div className="settings-head">
@@ -129,6 +152,12 @@ export const SettingsPanel = ({ requestJson }: SettingsPanelProps) => {
           onClick={() => setActiveSettingsTab("audit")}
         >
           Audit Logs
+        </button>
+        <button
+          className={activeSettingsTab === "recycle" ? "settings-tab active" : "settings-tab"}
+          onClick={() => setActiveSettingsTab("recycle")}
+        >
+          Recycle Bin
         </button>
       </div>
 
@@ -300,6 +329,63 @@ export const SettingsPanel = ({ requestJson }: SettingsPanelProps) => {
                       <td>{log.message}</td>
                     </tr>
                   ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {activeSettingsTab === "recycle" ? (
+        <section className="panel settings-recycle-panel">
+          <div className="panel-head">
+            <div>
+              <h3>Recycle Bin</h3>
+              <p className="meta">Deleted products stay here until an admin restores them.</p>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Name</th>
+                  <th>On Hand</th>
+                  <th>Sell Price</th>
+                  <th>Updated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recycledProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6}>Recycle bin is empty.</td>
+                  </tr>
+                ) : (
+                  recycledProducts.map((product) => {
+                    const isRestoring = restoringProductId === product.id;
+
+                    return (
+                      <tr key={product.id}>
+                        <td>{product.sku}</td>
+                        <td>{product.name}</td>
+                        <td>{product.on_hand_qty}</td>
+                        <td>{product.sell_price}</td>
+                        <td>{formatDate(product.updated_at)}</td>
+                        <td>
+                          <button
+                            aria-label={`Restore product ${product.sku}`}
+                            className="secondary-btn table-action-btn"
+                            disabled={isRestoring}
+                            onClick={() => void onRestoreProduct(product)}
+                            type="button"
+                          >
+                            {isRestoring ? "Restoring..." : "Restore"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

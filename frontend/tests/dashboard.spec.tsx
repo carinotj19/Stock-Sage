@@ -220,6 +220,166 @@ describe("Dashboard rendering", () => {
     expect(await screen.findByText("AMD Ryzen 3 3200G")).toBeInTheDocument();
   });
 
+  it("lets admins move products to the recycle bin and restore them from settings", async () => {
+    const product = {
+      id: 1,
+      sku: "GPU-DELETE-1",
+      name: "Deletable GPU",
+      category: "GPU",
+      supplier_id: null,
+      cost_price: "12000.00",
+      sell_price: "15000.00",
+      reorder_min_qty: 1,
+      reorder_multiple: 1,
+      safety_stock: 2,
+      active: true,
+      on_hand_qty: 5,
+      created_at: "2026-04-09T00:00:00Z",
+      updated_at: "2026-04-09T00:00:00Z"
+    };
+
+    let activeProducts = [product];
+    let recycledProducts: typeof activeProducts = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (url.endsWith("/products/1") && init?.method === "DELETE") {
+        const deletedProduct = { ...product, active: false };
+        activeProducts = [];
+        recycledProducts = [deletedProduct];
+        return {
+          ok: true,
+          json: async () => deletedProduct
+        };
+      }
+
+      if (url.endsWith("/settings/recycle-bin/products/1/restore") && init?.method === "POST") {
+        const restoredProduct = { ...product, active: true };
+        activeProducts = [restoredProduct];
+        recycledProducts = [];
+        return {
+          ok: true,
+          json: async () => restoredProduct
+        };
+      }
+
+      if (url.endsWith("/settings/recycle-bin/products")) {
+        return {
+          ok: true,
+          json: async () => recycledProducts
+        };
+      }
+
+      if (url.includes("/settings/accounts") || url.includes("/settings/audit-logs")) {
+        return {
+          ok: true,
+          json: async () => []
+        };
+      }
+
+      if (url.includes("/settings/system")) {
+        return {
+          ok: true,
+          json: async () => ({ auth_enabled: true, configured: true, active_accounts: 1, admin_accounts: 1, staff_accounts: 0, session_ttl_seconds: 86400 })
+        };
+      }
+
+      if (url.includes("/products")) {
+        return {
+          ok: true,
+          json: async () => activeProducts
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    expect(await screen.findByText("Deletable GPU")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /delete product gpu-delete-1/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/products/1"),
+        expect.objectContaining({ method: "DELETE" })
+      );
+    });
+    expect(await screen.findByText("Product moved to recycle bin.")).toBeInTheDocument();
+    expect(screen.queryByText("Deletable GPU")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /recycle bin/i }));
+    expect(await screen.findByText("Deletable GPU")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /restore product gpu-delete-1/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/recycle-bin/products/1/restore"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    expect(await screen.findByText("Product restored.")).toBeInTheDocument();
+    expect(screen.queryByText("Deletable GPU")).not.toBeInTheDocument();
+  });
+
+  it("does not show product delete actions for staff accounts", async () => {
+    const product = {
+      id: 1,
+      sku: "CPU-STAFF-1",
+      name: "Staff Visible CPU",
+      category: "CPU",
+      supplier_id: null,
+      cost_price: "3200.00",
+      sell_price: "4500.00",
+      reorder_min_qty: 1,
+      reorder_multiple: 1,
+      safety_stock: 10,
+      active: true,
+      on_hand_qty: 19,
+      created_at: "2026-04-09T00:00:00Z",
+      updated_at: "2026-04-09T00:00:00Z"
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "staff", display_name: "Staff Member", role: "staff" }
+              : url.includes("/products")
+                ? [product]
+                : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    expect(await screen.findByText("Staff Visible CPU")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /edit product cpu-staff-1/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete product cpu-staff-1/i })).not.toBeInTheDocument();
+  });
+
   it("loads the item forecast with a 365-day history window", async () => {
     const lowStockRows = [
       {

@@ -199,6 +199,100 @@ def test_admin_can_create_staff_account_and_read_audit_logs(monkeypatch) -> None
         _cleanup_auth_client(app, engine)
 
 
+def test_admin_can_soft_delete_product_and_restore_from_recycle_bin(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(monkeypatch)
+    try:
+        client.post("/auth/login", json={"username": "admin", "password": "correct-password"})
+        product_response = client.post(
+            "/products",
+            json={
+                "sku": "SKU-RECYCLE-1",
+                "name": "Recycle Bin Item",
+                "category": "CPU",
+                "cost_price": "1000.00",
+                "sell_price": "1500.00",
+                "reorder_min_qty": 1,
+                "reorder_multiple": 1,
+                "safety_stock": 0,
+                "active": True,
+                "initial_stock": 4,
+            },
+        )
+        product_id = product_response.json()["id"]
+
+        delete_response = client.delete(f"/products/{product_id}")
+        list_response = client.get("/products")
+        recycle_response = client.get("/settings/recycle-bin/products")
+        logs_response = client.get("/settings/audit-logs")
+        restore_response = client.post(f"/settings/recycle-bin/products/{product_id}/restore")
+        restored_list_response = client.get("/products")
+
+        assert product_response.status_code == 200
+        assert delete_response.status_code == 200
+        assert delete_response.json()["active"] is False
+        assert all(product["id"] != product_id for product in list_response.json())
+
+        assert recycle_response.status_code == 200
+        recycled_products = recycle_response.json()
+        assert [product["id"] for product in recycled_products] == [product_id]
+        assert recycled_products[0]["active"] is False
+
+        assert logs_response.status_code == 200
+        audit_actions = [entry["action"] for entry in logs_response.json()]
+        assert "product.deleted" in audit_actions
+
+        assert restore_response.status_code == 200
+        assert restore_response.json()["active"] is True
+        assert any(product["id"] == product_id for product in restored_list_response.json())
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
+def test_staff_cannot_soft_delete_product(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(monkeypatch)
+    try:
+        client.post("/auth/login", json={"username": "admin", "password": "correct-password"})
+        product_response = client.post(
+            "/products",
+            json={
+                "sku": "SKU-STAFF-DELETE",
+                "name": "Staff Delete Blocked",
+                "category": "GPU",
+                "cost_price": "2000.00",
+                "sell_price": "2500.00",
+                "reorder_min_qty": 1,
+                "reorder_multiple": 1,
+                "safety_stock": 0,
+                "active": True,
+                "initial_stock": 2,
+            },
+        )
+        create_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "staff",
+                "display_name": "Staff Member",
+                "email": "staff@example.com",
+                "role": "staff",
+                "password": "staff-password",
+            },
+        )
+        client.post("/auth/logout")
+        staff_login_response = client.post(
+            "/auth/login",
+            json={"username": "staff", "password": "staff-password"},
+        )
+        delete_response = client.delete(f"/products/{product_response.json()['id']}")
+
+        assert product_response.status_code == 200
+        assert create_response.status_code == 201
+        assert staff_login_response.status_code == 200
+        assert delete_response.status_code == 403
+        assert delete_response.json()["detail"] == "Admin role required."
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
 def test_staff_can_use_dashboard_routes_but_cannot_manage_settings(monkeypatch) -> None:
     client, app, engine = _build_auth_client(monkeypatch)
     try:

@@ -441,6 +441,20 @@ const App = () => {
     }
   };
 
+  const onDeleteProduct = async (productId: number) => {
+    setActionMessage(null);
+    try {
+      await requestJson<ProductRow>(`/products/${productId}`, {
+        method: "DELETE"
+      });
+      await loadData();
+      setActionMessage("Product moved to recycle bin.");
+    } catch (error) {
+      setActionMessage(`Delete product failed: ${String(error)}`);
+      throw error;
+    }
+  };
+
   const onRecordSale = async (event: FormEvent) => {
     event.preventDefault();
     setActionMessage(null);
@@ -823,7 +837,13 @@ const App = () => {
             </form>
           </section>
 
-          <InventoryProductsTable formatPHP={formatPHP} onSaveProduct={onSaveProduct} products={products} />
+          <InventoryProductsTable
+            canDeleteProducts={authState.role === "admin"}
+            formatPHP={formatPHP}
+            onDeleteProduct={onDeleteProduct}
+            onSaveProduct={onSaveProduct}
+            products={products}
+          />
         </section>
       ) : null}
 
@@ -906,7 +926,9 @@ const App = () => {
         </section>
       ) : null}
 
-      {activeTab === "settings" && authState.role === "admin" ? <SettingsPanel requestJson={requestJson} /> : null}
+      {activeTab === "settings" && authState.role === "admin" ? (
+        <SettingsPanel requestJson={requestJson} onProductsChanged={loadData} />
+      ) : null}
 
       <ForecastItemModal
         isOpen={selectedForecastProductId !== null}

@@ -37,8 +37,14 @@ class ProductRepository:
         db.flush()
         return product
 
-    def list_products(self, db: Session) -> list[Product]:
+    def list_products(self, db: Session, *, active_only: bool = True) -> list[Product]:
         statement = select(Product).order_by(Product.name.asc())
+        if active_only:
+            statement = statement.where(Product.active.is_(True))
+        return list(db.scalars(statement).all())
+
+    def list_recycled_products(self, db: Session) -> list[Product]:
+        statement = select(Product).where(Product.active.is_(False)).order_by(Product.updated_at.desc(), Product.name.asc())
         return list(db.scalars(statement).all())
 
     def get_product(self, db: Session, product_id: int) -> Product | None:

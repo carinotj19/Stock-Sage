@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db.models import AdminUser, AuditLog
 from app.db.session import get_db
 from app.schemas.auth import AccountCreateRequest, AccountRead, AuditLogRead, SystemSettingsRead
+from app.schemas.inventory import ProductRead
 from app.services.auth_service import (
     get_session_ttl_seconds,
     get_user_display_name,
@@ -16,6 +17,7 @@ from app.services.auth_service import (
     record_audit_log,
     require_admin,
 )
+from app.services.inventory_service import InventoryService
 
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -171,3 +173,22 @@ def list_audit_logs(
 ) -> list[AuditLogRead]:
     logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit)).all()
     return [_audit_log_read(log) for log in logs]
+
+
+@router.get("/recycle-bin/products", response_model=list[ProductRead])
+def list_recycled_products(
+    _: AdminUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[ProductRead]:
+    service = InventoryService(db)
+    return service.list_recycled_products()
+
+
+@router.post("/recycle-bin/products/{product_id}/restore", response_model=ProductRead)
+def restore_recycled_product(
+    product_id: int,
+    actor: AdminUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> ProductRead:
+    service = InventoryService(db)
+    return service.restore_product(product_id, actor)

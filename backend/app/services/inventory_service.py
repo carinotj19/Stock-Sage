@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import StockMovement, Supplier
+from app.db.models import AdminUser, InventoryBalance, Product, StockMovement, Supplier
 from app.repositories.product_repository import ProductRepository
 from app.schemas.inventory import (
     InventoryAdjustRequest,
@@ -14,6 +14,7 @@ from app.schemas.inventory import (
     ProductUpdate,
     SupplierCreate,
 )
+from app.services.auth_service import record_audit_log
 
 
 class InventoryService:
@@ -86,30 +87,23 @@ class InventoryService:
 
         for product in products:
             balance = self.product_repository.get_inventory_balance(self.db, product.id)
-            result.append(
-                ProductRead(
-                    id=product.id,
-                    sku=product.sku,
-                    name=product.name,
-                    category=product.category,
-                    supplier_id=product.supplier_id,
-                    cost_price=product.cost_price,
-                    sell_price=product.sell_price,
-                    reorder_min_qty=product.reorder_min_qty,
-                    reorder_multiple=product.reorder_multiple,
-                    safety_stock=product.safety_stock,
-                    active=product.active,
-                    on_hand_qty=balance.on_hand_qty if balance else 0,
-                    created_at=product.created_at,
-                    updated_at=product.updated_at,
-                )
-            )
+            result.append(self._to_product_read_model(product, balance))
+
+        return result
+
+    def list_recycled_products(self) -> list[ProductRead]:
+        products = self.product_repository.list_recycled_products(self.db)
+        result: list[ProductRead] = []
+
+        for product in products:
+            balance = self.product_repository.get_inventory_balance(self.db, product.id)
+            result.append(self._to_product_read_model(product, balance))
 
         return result
 
     def update_product(self, product_id: int, payload: ProductUpdate) -> ProductRead:
         product = self.product_repository.get_product(self.db, product_id)
-        if product is None:
+        if product is None or not product.active:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product {product_id} was not found.",
@@ -153,7 +147,7 @@ class InventoryService:
 
     def adjust_stock(self, payload: InventoryAdjustRequest) -> InventoryAdjustResponse:
         product = self.product_repository.get_product(self.db, payload.product_id)
-        if product is None:
+        if product is None or not product.active:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product {payload.product_id} was not found.",
@@ -194,6 +188,54 @@ class InventoryService:
             last_movement_at=balance.last_movement_at,
         )
 
+    def soft_delete_product(self, product_id: int, actor: AdminUser) -> ProductRead:
+        product = self.product_repository.get_product(self.db, product_id)
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product {product_id} was not found.",
+            )
+
+        if product.active:
+            product.active = False
+            self.db.add(product)
+            record_audit_log(
+                self.db,
+                actor=actor,
+                action="product.deleted",
+                target_type="product",
+                target_id=product.id,
+                message=f"Moved product {product.sku} to recycle bin.",
+            )
+            self.db.commit()
+            self.db.refresh(product)
+
+        return self._to_product_read(product_id)
+
+    def restore_product(self, product_id: int, actor: AdminUser) -> ProductRead:
+        product = self.product_repository.get_product(self.db, product_id)
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product {product_id} was not found.",
+            )
+
+        if not product.active:
+            product.active = True
+            self.db.add(product)
+            record_audit_log(
+                self.db,
+                actor=actor,
+                action="product.restored",
+                target_type="product",
+                target_id=product.id,
+                message=f"Restored product {product.sku} from recycle bin.",
+            )
+            self.db.commit()
+            self.db.refresh(product)
+
+        return self._to_product_read(product_id)
+
     def _to_product_read(self, product_id: int) -> ProductRead:
         product = self.product_repository.get_product(self.db, product_id)
         balance = self.product_repository.get_inventory_balance(self.db, product_id)
@@ -203,6 +245,9 @@ class InventoryService:
                 detail=f"Product {product_id} was not found.",
             )
 
+        return self._to_product_read_model(product, balance)
+
+    def _to_product_read_model(self, product: Product, balance: InventoryBalance | None) -> ProductRead:
         return ProductRead(
             id=product.id,
             sku=product.sku,

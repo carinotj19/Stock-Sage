@@ -19,7 +19,9 @@ type ProductEditForm = {
 };
 
 type InventoryProductsTableProps = {
+  canDeleteProducts?: boolean;
   formatPHP: (value: string) => string;
+  onDeleteProduct?: (productId: number) => Promise<void>;
   onSaveProduct: (productId: number, payload: InventoryProductUpdatePayload) => Promise<void>;
   products: ProductRow[];
 };
@@ -33,13 +35,16 @@ const buildProductEditForm = (product: ProductRow): ProductEditForm => ({
 });
 
 export const InventoryProductsTable = ({
+  canDeleteProducts = false,
   formatPHP,
+  onDeleteProduct,
   onSaveProduct,
   products
 }: InventoryProductsTableProps) => {
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<ProductEditForm | null>(null);
   const [savingProductId, setSavingProductId] = useState<number | null>(null);
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
 
   const onStartEdit = (product: ProductRow) => {
     setEditingProductId(product.id);
@@ -90,6 +95,18 @@ export const InventoryProductsTable = ({
     }
   };
 
+  const onDelete = async (product: ProductRow) => {
+    if (!onDeleteProduct) return;
+
+    setDeletingProductId(product.id);
+
+    try {
+      await onDeleteProduct(product.id);
+    } catch {
+      setDeletingProductId(null);
+    }
+  };
+
   return (
     <section className="panel panel-wide inventory-card inventory-card--products">
       <h2>Products</h2>
@@ -114,6 +131,7 @@ export const InventoryProductsTable = ({
               products.map((product) => {
                 const isEditing = editingProductId === product.id && editForm !== null;
                 const isSaving = savingProductId === product.id;
+                const isDeleting = deletingProductId === product.id;
                 const rowLabel = product.sku;
 
                 return (
@@ -210,14 +228,28 @@ export const InventoryProductsTable = ({
                           </button>
                         </div>
                       ) : (
-                        <button
-                          aria-label={`Edit product ${rowLabel}`}
-                          className="inline-action-btn"
-                          onClick={() => onStartEdit(product)}
-                          type="button"
-                        >
-                          Edit
-                        </button>
+                        <div className="table-action-group">
+                          <button
+                            aria-label={`Edit product ${rowLabel}`}
+                            className="inline-action-btn"
+                            disabled={isDeleting}
+                            onClick={() => onStartEdit(product)}
+                            type="button"
+                          >
+                            Edit
+                          </button>
+                          {canDeleteProducts ? (
+                            <button
+                              aria-label={`Delete product ${rowLabel}`}
+                              className="danger-link table-danger-btn"
+                              disabled={isDeleting}
+                              onClick={() => void onDelete(product)}
+                              type="button"
+                            >
+                              {isDeleting ? "Deleting..." : "Delete"}
+                            </button>
+                          ) : null}
+                        </div>
                       )}
                     </td>
                   </tr>
