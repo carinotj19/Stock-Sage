@@ -12,13 +12,22 @@ from app.db.session import init_db
 from app.services.auth_service import require_authenticated_user
 
 
+def _parse_cors_allow_origins(value: str) -> list[str]:
+    origins: list[str] = []
+    for raw_origin in value.split(","):
+        origin = raw_origin.strip().strip("\"'").rstrip("/")
+        if origin and origin not in origins:
+            origins.append(origin)
+    return origins
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Stock Sage API")
     cors_allow_origins = os.getenv(
         "CORS_ALLOW_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173",
     )
-    origins = [origin.strip() for origin in cors_allow_origins.split(",") if origin.strip()]
+    origins = _parse_cors_allow_origins(cors_allow_origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
