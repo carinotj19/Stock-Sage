@@ -64,65 +64,6 @@ export type ProductRow = {
   updated_at: string;
 };
 
-export type ForecastReportSummary = {
-  sku_count: number;
-  recommendations_count: number;
-  stockout_within_horizon_count: number;
-  reorder_required_count: number;
-  total_suggested_reorder_qty: number;
-  avg_confidence: number | null;
-};
-
-export type ForecastEvaluationMetrics = {
-  evaluation_days: number;
-  evaluated_skus: number;
-  model_mae: number | null;
-  model_mape_pct: number | null;
-  model_wmape_pct: number | null;
-  baseline_mae: number | null;
-  baseline_mape_pct: number | null;
-  baseline_wmape_pct: number | null;
-  mae_improvement_pct: number | null;
-  wmape_improvement_pct: number | null;
-  mae_diff_ci95_low: number | null;
-  mae_diff_ci95_high: number | null;
-  wmape_diff_ci95_low: number | null;
-  wmape_diff_ci95_high: number | null;
-  sign_test_p_value: number | null;
-  better_than_baseline_skus: number;
-  compared_skus: number;
-};
-
-export type ForecastExplainabilityRow = {
-  product_id: number;
-  sku: string;
-  name: string;
-  on_hand_qty: number;
-  lead_time_days: number;
-  safety_stock: number;
-  predicted_30d_units: number;
-  avg_daily_units: number;
-  predicted_stockout_date: string | null;
-  reorder_point: number;
-  suggested_qty: number;
-  confidence_score: number | null;
-  explanation: string;
-};
-
-export type ForecastReportResponse = {
-  run_id: number;
-  run_at: string;
-  horizon_days: number;
-  model_version: string;
-  summary: ForecastReportSummary;
-  evaluation_full: ForecastEvaluationMetrics;
-  evaluation_mature: ForecastEvaluationMetrics;
-  mature_sku_criteria: string;
-  evaluation: ForecastEvaluationMetrics;
-  markdown_report: string;
-  explainability_rows: ForecastExplainabilityRow[];
-};
-
 export type ItemDemandPoint = {
   date: string;
   units: number;

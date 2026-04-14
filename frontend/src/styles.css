@@ -836,49 +836,6 @@ tbody tr:hover {
   grid-column: 1 / -1;
 }
 
-.report-panel {
-  margin-top: 1.2rem;
-}
-
-.report-kpi-grid {
-  margin-top: 0.8rem;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.report-kpi {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fffdf8;
-  padding: 0.7rem 0.8rem;
-}
-
-.report-table-wrap {
-  margin-top: 0.9rem;
-}
-
-.report-details {
-  margin-top: 0.9rem;
-}
-
-.report-details summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.report-markdown {
-  margin-top: 0.6rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fbf8f3;
-  padding: 0.9rem;
-  white-space: pre-wrap;
-  font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
 .settings-page {
   margin-top: 1.1rem;
 }
@@ -1394,10 +1351,6 @@ tbody tr:hover {
   }
 
   .kpi-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .report-kpi-grid {
     grid-template-columns: 1fr;
   }
 

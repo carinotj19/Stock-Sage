@@ -8,7 +8,6 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
 import type {
-  ForecastReportResponse,
   ItemForecastDetail,
   ProductRow,
   LowStockRow,
@@ -88,8 +87,6 @@ const App = () => {
       currency: "PHP",
       maximumFractionDigits: 0
     }).format(value);
-  const formatOptionalMetric = (value: number | null, decimals = 2, suffix = "") =>
-    value === null ? "n/a" : `${value.toFixed(decimals)}${suffix}`;
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "inventory" | "transactions" | "settings">("dashboard");
   const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
@@ -104,9 +101,6 @@ const App = () => {
   const [salesTrend, setSalesTrend] = useState<SalesTrendPoint[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [sourceQualityRows, setSourceQualityRows] = useState<ScraperSourceQualityRow[]>([]);
-  const [forecastReport, setForecastReport] = useState<ForecastReportResponse | null>(null);
-  const [isGeneratingReport, setIsGeneratingReport] = useState<boolean>(false);
-  const [reportError, setReportError] = useState<string | null>(null);
   const [selectedForecastProductId, setSelectedForecastProductId] = useState<number | null>(null);
   const [selectedForecastItem, setSelectedForecastItem] = useState<ItemForecastDetail | null>(null);
   const [isForecastModalLoading, setIsForecastModalLoading] = useState<boolean>(false);
@@ -149,8 +143,6 @@ const App = () => {
     const daysLeft = Math.ceil((toDateOnlyTimestamp(row.predicted_stockout_date) - toDateOnlyTimestamp(todayString)) / 86400000);
     return daysLeft >= 0 && daysLeft <= 5;
   }).length;
-  const forecastEvaluationFull = forecastReport ? (forecastReport.evaluation_full ?? forecastReport.evaluation) : null;
-  const forecastEvaluationMature = forecastReport ? (forecastReport.evaluation_mature ?? forecastReport.evaluation) : null;
   const lastUpdatedLabel = (() => {
     if (!lastUpdatedAt) return "Last updated: --";
     const minutes = Math.floor((Date.now() - lastUpdatedAt.getTime()) / 60000);
@@ -172,11 +164,9 @@ const App = () => {
     setSalesTrend([]);
     setProducts([]);
     setSourceQualityRows([]);
-    setForecastReport(null);
     setSelectedForecastProductId(null);
     setSelectedForecastItem(null);
     setApiError(null);
-    setReportError(null);
     setActionMessage(null);
     setLastUpdatedAt(null);
     setIsLoading(false);
@@ -285,35 +275,6 @@ const App = () => {
 
     setLastUpdatedAt(new Date());
     setIsLoading(false);
-  };
-
-  const onGenerateForecastReport = async () => {
-    setIsGeneratingReport(true);
-    setReportError(null);
-    try {
-      const report = await requestJson<ForecastReportResponse>(
-        "/dashboard/forecast-report?include_details=true&evaluation_days=7"
-      );
-      setForecastReport(report);
-      setActionMessage(`Forecast report generated from run #${report.run_id}.`);
-    } catch (error) {
-      setReportError(`Report generation failed: ${String(error)}`);
-    } finally {
-      setIsGeneratingReport(false);
-    }
-  };
-
-  const onDownloadForecastReport = () => {
-    if (!forecastReport) return;
-    const blob = new Blob([forecastReport.markdown_report], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `forecast-report-run-${forecastReport.run_id}.md`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {
@@ -540,13 +501,6 @@ const App = () => {
               </button>
             ) : null}
           </div>
-          <button
-            className="secondary-btn"
-            onClick={() => void onGenerateForecastReport()}
-            disabled={isGeneratingReport}
-          >
-            {isGeneratingReport ? "Generating Report..." : "Generate Forecast Report"}
-          </button>
           <button className="refresh-btn" onClick={() => void loadData()}>
             Refresh Data
           </button>
@@ -563,7 +517,6 @@ const App = () => {
           <p className="meta">{lastUpdatedLabel}</p>
         </div>
         {apiError ? <p className="status status-error">{apiError}</p> : null}
-        {reportError ? <p className="status status-error">{reportError}</p> : null}
         {isLoading ? <p className="status">Loading latest data...</p> : null}
         {actionMessage ? <p className="status">{actionMessage}</p> : null}
 
@@ -630,72 +583,6 @@ const App = () => {
       {activeTab === "dashboard" ? (
         <section className="dashboard-grid dashboard-grid--source-quality">
           <SourceQualityPanel rows={sourceQualityRows} windowHours={24} />
-        </section>
-      ) : null}
-
-      {activeTab === "dashboard" && forecastReport ? (
-        <section className="panel report-panel">
-          <div className="panel-head">
-            <h2>Developer Forecast Metrics Report</h2>
-            <button className="secondary-btn" onClick={onDownloadForecastReport}>
-              Download .md
-            </button>
-          </div>
-          <p className="meta">
-            Run #{forecastReport.run_id} | Horizon {forecastReport.horizon_days} days | Model {forecastReport.model_version}
-          </p>
-
-          <div className="report-kpi-grid">
-            <article className="report-kpi">
-              <p className="kpi-label">Full Evaluated SKUs</p>
-              <p className="kpi-value">{forecastEvaluationFull?.evaluated_skus ?? 0}</p>
-            </article>
-            <article className="report-kpi">
-              <p className="kpi-label">Full Model wMAPE</p>
-              <p className="kpi-value">{formatOptionalMetric(forecastEvaluationFull?.model_wmape_pct ?? null, 2, "%")}</p>
-            </article>
-            <article className="report-kpi">
-              <p className="kpi-label">Mature Evaluated SKUs</p>
-              <p className="kpi-value">{forecastEvaluationMature?.evaluated_skus ?? 0}</p>
-            </article>
-            <article className="report-kpi">
-              <p className="kpi-label">Mature Model wMAPE</p>
-              <p className="kpi-value">{formatOptionalMetric(forecastEvaluationMature?.model_wmape_pct ?? null, 2, "%")}</p>
-            </article>
-          </div>
-          <p className="meta">Mature SKU criteria: {forecastReport.mature_sku_criteria}</p>
-
-          {forecastReport.explainability_rows.length > 0 ? (
-            <div className="table-wrap report-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Stockout</th>
-                    <th>Reorder</th>
-                    <th>Confidence</th>
-                    <th>Explanation</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecastReport.explainability_rows.slice(0, 10).map((row) => (
-                    <tr key={row.product_id}>
-                      <td>{row.sku}</td>
-                      <td>{row.predicted_stockout_date ?? "none"}</td>
-                      <td>{row.suggested_qty}</td>
-                      <td>{formatOptionalMetric(row.confidence_score, 3)}</td>
-                      <td>{row.explanation}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-
-          <details className="report-details">
-            <summary>Raw Markdown Report</summary>
-            <pre className="report-markdown">{forecastReport.markdown_report}</pre>
-          </details>
         </section>
       ) : null}
 

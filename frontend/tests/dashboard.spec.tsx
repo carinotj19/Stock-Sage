@@ -89,31 +89,25 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
-  it("shows an actionable API connectivity error when forecast report fetch fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes("/dashboard/forecast-report")) {
-          throw new TypeError("Failed to fetch");
-        }
-
-        return {
-          ok: true,
-          json: async () =>
-            url.includes("/auth/me")
-              ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
-              : []
-        };
-      })
-    );
+  it("does not render the developer forecast metrics report controls", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () =>
+          url.includes("/auth/me")
+            ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
+            : []
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /generate forecast report/i }));
-
-    expect(await screen.findByText(/Cannot reach API at http:\/\/localhost:8000/)).toBeInTheDocument();
-    expect(screen.getByText(/Check that the backend URL is live and CORS allows this frontend/)).toBeInTheDocument();
+    expect(await screen.findByText("Low Stock Alerts")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /generate forecast report/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Developer Forecast Metrics Report")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/dashboard/forecast-report"))).toBe(false);
   });
 
   it("renders the add product category field as a dropdown", async () => {
