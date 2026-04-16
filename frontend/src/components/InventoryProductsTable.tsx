@@ -1,95 +1,125 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import type { ProductRow } from "../types";
 
-type DateSortDirection = "desc" | "asc";
+export type InventoryProductUpdatePayload = {
+  sku: string;
+  name: string;
+  sell_price: number;
+  safety_stock: number;
+  on_hand_qty: number;
+};
+
+type ProductEditForm = {
+  sku: string;
+  name: string;
+  sell_price: string;
+  safety_stock: string;
+  on_hand_qty: string;
+};
 
 type InventoryProductsTableProps = {
-  onSelectProduct?: (productId: number) => void;
+  canDeleteProducts?: boolean;
+  formatPHP: (value: string) => string;
+  onDeleteProduct?: (productId: number) => Promise<void>;
+  onSaveProduct: (productId: number, payload: InventoryProductUpdatePayload) => Promise<void>;
   products: ProductRow[];
 };
 
-const formatDate = (value: string) => {
-  const dateOnly = value.split("T")[0];
-  const [year, month, day] = dateOnly.split("-").map(Number);
+const buildProductEditForm = (product: ProductRow): ProductEditForm => ({
+  sku: product.sku,
+  name: product.name,
+  sell_price: product.sell_price,
+  safety_stock: String(product.safety_stock),
+  on_hand_qty: String(product.on_hand_qty)
+});
 
-  if (!year || !month || !day) return value;
+export const InventoryProductsTable = ({
+  canDeleteProducts = false,
+  formatPHP,
+  onDeleteProduct,
+  onSaveProduct,
+  products
+}: InventoryProductsTableProps) => {
+  const [editingProductId, setEditingProductId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<ProductEditForm | null>(null);
+  const [savingProductId, setSavingProductId] = useState<number | null>(null);
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
 
-  return `${month}/${day}/${year}`;
-};
+  const onStartEdit = (product: ProductRow) => {
+    setEditingProductId(product.id);
+    setEditForm(buildProductEditForm(product));
+  };
 
-const formatPHP = (value: number | string) => {
-  const numeric = Number(value);
-  if (Number.isNaN(numeric)) return String(value);
+  const onCancelEdit = () => {
+    setEditingProductId(null);
+    setEditForm(null);
+    setSavingProductId(null);
+  };
 
-  return new Intl.NumberFormat("en-PH", {
-    style: "currency",
-    currency: "PHP",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  }).format(numeric);
-};
+  const onEditFieldChange = (field: keyof ProductEditForm, value: string) => {
+    setEditForm((current) => (current ? { ...current, [field]: value } : current));
+  };
 
-const getInventoryValue = (product: ProductRow) => {
-  const unitPrice = Number(product.sell_price);
-  if (Number.isNaN(unitPrice)) return product.sell_price;
-  return product.on_hand_qty * unitPrice;
-};
+  const onSaveEdit = async (product: ProductRow) => {
+    if (!editForm) return;
 
-const getProductDateTimestamp = (product: ProductRow) => {
-  const timestamp = Date.parse(product.created_at);
-  return Number.isNaN(timestamp) ? 0 : timestamp;
-};
+    const sellPrice = Number(editForm.sell_price);
+    const safetyStock = Number(editForm.safety_stock);
+    const onHandQty = Number(editForm.on_hand_qty);
+    const isInvalidDraft =
+      editForm.sku.trim() === "" ||
+      editForm.name.trim() === "" ||
+      Number.isNaN(sellPrice) ||
+      sellPrice < 0 ||
+      Number.isNaN(safetyStock) ||
+      safetyStock < 0 ||
+      Number.isNaN(onHandQty) ||
+      onHandQty < 0;
 
-const sortProductsByDate = (products: ProductRow[], direction: DateSortDirection) =>
-  [...products].sort((left, right) => {
-    const dateDiff = getProductDateTimestamp(right) - getProductDateTimestamp(left);
-    const idDiff = right.id - left.id;
-    const newestFirstDiff = dateDiff || idDiff;
+    if (isInvalidDraft) return;
 
-    return direction === "desc" ? newestFirstDiff : -newestFirstDiff;
-  });
+    setSavingProductId(product.id);
 
-export const InventoryProductsTable = ({ onSelectProduct, products }: InventoryProductsTableProps) => {
-  const [dateSortDirection, setDateSortDirection] = useState<DateSortDirection>("desc");
-  const hasProductDetail = typeof onSelectProduct === "function";
-  const sortedProducts = useMemo(
-    () => sortProductsByDate(products, dateSortDirection),
-    [dateSortDirection, products]
-  );
-  const isLatestFirst = dateSortDirection === "desc";
+    try {
+      await onSaveProduct(product.id, {
+        sku: editForm.sku.trim(),
+        name: editForm.name.trim(),
+        sell_price: sellPrice,
+        safety_stock: safetyStock,
+        on_hand_qty: onHandQty
+      });
+      onCancelEdit();
+    } catch {
+      setSavingProductId(null);
+    }
+  };
 
-  const onToggleDateSort = () => {
-    setDateSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+  const onDelete = async (product: ProductRow) => {
+    if (!onDeleteProduct) return;
+
+    setDeletingProductId(product.id);
+
+    try {
+      await onDeleteProduct(product.id);
+    } catch {
+      setDeletingProductId(null);
+    }
   };
 
   return (
     <section className="panel panel-wide inventory-card inventory-card--products">
       <h2>Products</h2>
-      <div className="table-wrap inventory-products-table-wrap">
-        <table className="inventory-products-table">
+      <div className="table-wrap">
+        <table>
           <thead>
             <tr>
-              <th aria-sort={isLatestFirst ? "descending" : "ascending"}>
-                <button
-                  aria-label={`Sort products by date, ${isLatestFirst ? "oldest first" : "latest first"}`}
-                  className="date-filter-btn"
-                  onClick={onToggleDateSort}
-                  title="Toggle date sort"
-                  type="button"
-                >
-                  <span>Date</span>
-                  <span className="date-filter-state">{isLatestFirst ? "Latest" : "Oldest"}</span>
-                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                    <path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13a1.5 1.5 0 0 1 1.1 2.52L14 13.56V18a1.5 1.5 0 0 1-.72 1.28l-2 1.22A1.5 1.5 0 0 1 9 19.22v-5.66L4.4 7.52A1.5 1.5 0 0 1 4 6.5Zm2.4.5 4.28 5.62c.2.26.32.58.32.91v4.8l1-.61v-4.19c0-.33.12-.65.32-.91L17.6 7H6.4Z" />
-                  </svg>
-                </button>
-              </th>
-              <th>Product</th>
-              <th>Quantity</th>
-              <th className="align-right">Unit Price</th>
-              <th className="align-right">Total</th>
-              <th className="inventory-actions-heading">Actions</th>
+              <th>SKU</th>
+              <th>Name</th>
+              <th>On Hand</th>
+              <th>Sell Price</th>
+              <th>Safety Stock</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -98,35 +128,133 @@ export const InventoryProductsTable = ({ onSelectProduct, products }: InventoryP
                 <td colSpan={6}>No products yet.</td>
               </tr>
             ) : (
-              sortedProducts.map((product) => (
-                <tr key={product.id}>
-                  <td>{formatDate(product.created_at)}</td>
-                  <td>
-                    <span className="inventory-product-name">{product.name}</span>
-                    <span className="inventory-product-sku">{product.sku}</span>
-                  </td>
-                  <td>{product.on_hand_qty}</td>
-                  <td className="align-right">{formatPHP(product.sell_price)}</td>
-                  <td className="align-right inventory-total-value">{formatPHP(getInventoryValue(product))}</td>
-                  <td className="inventory-actions-cell">
-                    {hasProductDetail ? (
-                      <button
-                        aria-label={`View details for ${product.sku}`}
-                        className="icon-action-btn"
-                        onClick={() => onSelectProduct(product.id)}
-                        title="View product forecast and pricing detail"
-                        type="button"
-                      >
-                        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                          <path d="M12 5.5c-4.2 0-7.6 2.4-9.4 6.5 1.8 4.1 5.2 6.5 9.4 6.5s7.6-2.4 9.4-6.5c-1.8-4.1-5.2-6.5-9.4-6.5Zm0 11c-2.5 0-4.5-2-4.5-4.5s2-4.5 4.5-4.5 4.5 2 4.5 4.5-2 4.5-4.5 4.5Zm0-1.8A2.7 2.7 0 1 0 12 9.3a2.7 2.7 0 0 0 0 5.4Z" />
-                        </svg>
-                      </button>
-                    ) : (
-                      <span className="muted">-</span>
-                    )}
-                  </td>
-                </tr>
-              ))
+              products.map((product) => {
+                const isEditing = editingProductId === product.id && editForm !== null;
+                const isSaving = savingProductId === product.id;
+                const isDeleting = deletingProductId === product.id;
+                const rowLabel = product.sku;
+
+                return (
+                  <tr key={product.id}>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          aria-label={`SKU for ${rowLabel}`}
+                          className="table-input"
+                          value={editForm.sku}
+                          onChange={(event) => onEditFieldChange("sku", event.target.value)}
+                        />
+                      ) : (
+                        product.sku
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          aria-label={`Name for ${rowLabel}`}
+                          className="table-input"
+                          value={editForm.name}
+                          onChange={(event) => onEditFieldChange("name", event.target.value)}
+                        />
+                      ) : (
+                        product.name
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          aria-label={`On hand for ${rowLabel}`}
+                          className="table-input"
+                          min={0}
+                          step={1}
+                          type="number"
+                          value={editForm.on_hand_qty}
+                          onChange={(event) => onEditFieldChange("on_hand_qty", event.target.value)}
+                        />
+                      ) : (
+                        product.on_hand_qty
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          aria-label={`Sell price for ${rowLabel}`}
+                          className="table-input"
+                          min={0}
+                          step="0.01"
+                          type="number"
+                          value={editForm.sell_price}
+                          onChange={(event) => onEditFieldChange("sell_price", event.target.value)}
+                        />
+                      ) : (
+                        formatPHP(product.sell_price)
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          aria-label={`Safety stock for ${rowLabel}`}
+                          className="table-input"
+                          min={0}
+                          step={1}
+                          type="number"
+                          value={editForm.safety_stock}
+                          onChange={(event) => onEditFieldChange("safety_stock", event.target.value)}
+                        />
+                      ) : (
+                        product.safety_stock
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <div className="table-action-group">
+                          <button
+                            aria-label={`Save product ${rowLabel}`}
+                            className="primary-btn table-action-btn"
+                            disabled={isSaving}
+                            onClick={() => void onSaveEdit(product)}
+                            type="button"
+                          >
+                            {isSaving ? "Saving..." : "Save"}
+                          </button>
+                          <button
+                            aria-label={`Cancel editing ${rowLabel}`}
+                            className="secondary-btn table-action-btn"
+                            disabled={isSaving}
+                            onClick={onCancelEdit}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="table-action-group">
+                          <button
+                            aria-label={`Edit product ${rowLabel}`}
+                            className="inline-action-btn"
+                            disabled={isDeleting}
+                            onClick={() => onStartEdit(product)}
+                            type="button"
+                          >
+                            Edit
+                          </button>
+                          {canDeleteProducts ? (
+                            <button
+                              aria-label={`Delete product ${rowLabel}`}
+                              className="danger-link table-danger-btn"
+                              disabled={isDeleting}
+                              onClick={() => void onDelete(product)}
+                              type="button"
+                            >
+                              {isDeleting ? "Deleting..." : "Delete"}
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

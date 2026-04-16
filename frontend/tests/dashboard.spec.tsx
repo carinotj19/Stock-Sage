@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/App";
@@ -124,8 +124,8 @@ describe("Dashboard rendering", () => {
     );
   });
 
-  it("renders inventory products with totals and opens details from the eye action", async () => {
-    const latestProduct = {
+  it("allows editing a product from the inventory table", async () => {
+    const product = {
       id: 1,
       sku: "CPU-AMD-3300",
       name: "AMD Ryzen 3 3200",
@@ -137,22 +137,13 @@ describe("Dashboard rendering", () => {
       reorder_multiple: 1,
       safety_stock: 10,
       active: true,
-      on_hand_qty: 22,
+      on_hand_qty: 19,
       created_at: "2026-04-09T00:00:00Z",
       updated_at: "2026-04-09T00:00:00Z"
     };
-    const olderProduct = {
-      ...latestProduct,
-      id: 2,
-      sku: "RAM-DDR4-8GB",
-      name: "8GB DDR4 RAM",
-      sell_price: "1800.00",
-      on_hand_qty: 1,
-      created_at: "2026-04-01T00:00:00Z",
-      updated_at: "2026-04-01T00:00:00Z"
-    };
 
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    let currentProduct = product;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
       if (url.includes("/auth/me")) {
@@ -162,17 +153,26 @@ describe("Dashboard rendering", () => {
         };
       }
 
-      if (url.includes("/dashboard/item-forecast/1")) {
+      if (url.endsWith("/products") && init?.method === "PATCH") {
+        throw new Error("Unexpected bulk patch");
+      }
+
+      if (url.endsWith("/products/1") && init?.method === "PATCH") {
+        const payload = JSON.parse(String(init.body));
+        currentProduct = {
+          ...currentProduct,
+          ...payload
+        };
         return {
           ok: true,
-          json: async () => buildItemForecastDetail(365)
+          json: async () => currentProduct
         };
       }
 
       if (url.includes("/products")) {
         return {
           ok: true,
-          json: async () => [olderProduct, latestProduct]
+          json: async () => [currentProduct]
         };
       }
 
@@ -188,42 +188,33 @@ describe("Dashboard rendering", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
     expect(await screen.findByText("AMD Ryzen 3 3200")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /date/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Product" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Quantity" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Unit Price" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Total" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
-    expect(screen.getByText("4/9/2026")).toBeInTheDocument();
-    expect(screen.getByText("CPU-AMD-3300")).toBeInTheDocument();
-    expect(screen.getByText("22")).toBeInTheDocument();
-    expect(screen.getByText("₱4,500")).toBeInTheDocument();
-    expect(screen.getByText("₱99,000")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /edit product cpu-amd-3300/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /delete product cpu-amd-3300/i })).not.toBeInTheDocument();
 
-    const productRows = screen
-      .getAllByRole("row")
-      .filter((row) => within(row).queryByText("AMD Ryzen 3 3200") || within(row).queryByText("8GB DDR4 RAM"));
-    expect(within(productRows[0]).getByText("AMD Ryzen 3 3200")).toBeInTheDocument();
-    expect(within(productRows[1]).getByText("8GB DDR4 RAM")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /sort products by date, oldest first/i }));
-    const reversedRows = screen
-      .getAllByRole("row")
-      .filter((row) => within(row).queryByText("AMD Ryzen 3 3200") || within(row).queryByText("8GB DDR4 RAM"));
-    expect(within(reversedRows[0]).getByText("8GB DDR4 RAM")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /sort products by date, latest first/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /view details for cpu-amd-3300/i }));
+    fireEvent.click(screen.getByRole("button", { name: /edit product cpu-amd-3300/i }));
+    fireEvent.change(screen.getByLabelText(/name for cpu-amd-3300/i), {
+      target: { value: "AMD Ryzen 3 3200G" }
+    });
+    fireEvent.change(screen.getByLabelText(/sell price for cpu-amd-3300/i), {
+      target: { value: "4999.00" }
+    });
+    fireEvent.change(screen.getByLabelText(/on hand for cpu-amd-3300/i), {
+      target: { value: "22" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save product cpu-amd-3300/i }));
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/dashboard/item-forecast/1?history_days=365"))).toBe(true);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/products/1"),
+        expect.objectContaining({
+          method: "PATCH"
+        })
+      );
     });
-    expect(await screen.findByText("Sales history period")).toBeInTheDocument();
+
+    expect(await screen.findByText("Product updated.")).toBeInTheDocument();
+    expect(await screen.findByText("AMD Ryzen 3 3200G")).toBeInTheDocument();
   });
 
-  it("restores recycled products from settings", async () => {
+  it("lets admins move products to the recycle bin and restore them from settings", async () => {
     const product = {
       id: 1,
       sku: "GPU-DELETE-1",
@@ -241,8 +232,8 @@ describe("Dashboard rendering", () => {
       updated_at: "2026-04-09T00:00:00Z"
     };
 
-    let activeProducts: (typeof product)[] = [];
-    let recycledProducts: (typeof product)[] = [{ ...product, active: false }];
+    let activeProducts = [product];
+    let recycledProducts: typeof activeProducts = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -250,6 +241,16 @@ describe("Dashboard rendering", () => {
         return {
           ok: true,
           json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (url.endsWith("/products/1") && init?.method === "DELETE") {
+        const deletedProduct = { ...product, active: false };
+        activeProducts = [];
+        recycledProducts = [deletedProduct];
+        return {
+          ok: true,
+          json: async () => deletedProduct
         };
       }
 
@@ -301,7 +302,21 @@ describe("Dashboard rendering", () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /settings/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    expect(await screen.findByText("Deletable GPU")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /delete product gpu-delete-1/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/products/1"),
+        expect.objectContaining({ method: "DELETE" })
+      );
+    });
+    expect(await screen.findByText("Product moved to recycle bin.")).toBeInTheDocument();
+    expect(screen.queryByText("Deletable GPU")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
     fireEvent.click(await screen.findByRole("button", { name: /recycle bin/i }));
     expect(await screen.findByText("Deletable GPU")).toBeInTheDocument();
 
@@ -317,7 +332,7 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Deletable GPU")).not.toBeInTheDocument();
   });
 
-  it("shows view-only product details for staff accounts", async () => {
+  it("does not show product delete actions for staff accounts", async () => {
     const product = {
       id: 1,
       sku: "CPU-STAFF-1",
@@ -355,8 +370,7 @@ describe("Dashboard rendering", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
     expect(await screen.findByText("Staff Visible CPU")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /view details for cpu-staff-1/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /edit product cpu-staff-1/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /edit product cpu-staff-1/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete product cpu-staff-1/i })).not.toBeInTheDocument();
   });
 

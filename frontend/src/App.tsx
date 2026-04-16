@@ -18,6 +18,7 @@ import type {
   UserRole
 } from "./types";
 import "./styles.css";
+import type { InventoryProductUpdatePayload } from "./components/InventoryProductsTable";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
@@ -71,6 +72,15 @@ const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => 
 const toDateOnlyTimestamp = (dateString: string) => new Date(`${dateString}T00:00:00`).getTime();
 
 const App = () => {
+  const formatPHP = (value: string) => {
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return value;
+    return new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency: "PHP",
+      minimumFractionDigits: 2
+    }).format(numeric);
+  };
   const formatPHPCompact = (value: number) =>
     new Intl.NumberFormat("en-PH", {
       style: "currency",
@@ -373,6 +383,36 @@ const App = () => {
       await loadData();
     } catch (error) {
       setActionMessage(`Adjust stock failed: ${String(error)}`);
+    }
+  };
+
+  const onSaveProduct = async (productId: number, payload: InventoryProductUpdatePayload) => {
+    setActionMessage(null);
+    try {
+      await requestJson<ProductRow>(`/products/${productId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadData();
+      setActionMessage("Product updated.");
+    } catch (error) {
+      setActionMessage(`Update product failed: ${String(error)}`);
+      throw error;
+    }
+  };
+
+  const onDeleteProduct = async (productId: number) => {
+    setActionMessage(null);
+    try {
+      await requestJson<ProductRow>(`/products/${productId}`, {
+        method: "DELETE"
+      });
+      await loadData();
+      setActionMessage("Product moved to recycle bin.");
+    } catch (error) {
+      setActionMessage(`Delete product failed: ${String(error)}`);
+      throw error;
     }
   };
 
@@ -685,7 +725,10 @@ const App = () => {
           </section>
 
           <InventoryProductsTable
-            onSelectProduct={onOpenItemForecast}
+            canDeleteProducts={authState.role === "admin"}
+            formatPHP={formatPHP}
+            onDeleteProduct={onDeleteProduct}
+            onSaveProduct={onSaveProduct}
             products={products}
           />
         </section>
