@@ -852,6 +852,49 @@ tbody tr:hover {
   vertical-align: middle;
 }
 
+.date-filter-btn {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-ink);
+  padding: 0.28rem 0.42rem;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 800;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.date-filter-btn:hover,
+.date-filter-btn:focus-visible {
+  border-color: #cbded7;
+  background: #eef6f3;
+  color: var(--accent-strong);
+}
+
+.date-filter-state {
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e5ded2;
+  color: #536172;
+  padding: 0.14rem 0.34rem;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.date-filter-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
 .inventory-product-name {
   display: block;
   font-weight: 800;

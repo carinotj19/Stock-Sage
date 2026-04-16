@@ -1,4 +1,8 @@
+import { useMemo, useState } from "react";
+
 import type { ProductRow } from "../types";
+
+type DateSortDirection = "desc" | "asc";
 
 type InventoryProductsTableProps = {
   onSelectProduct?: (productId: number) => void;
@@ -32,8 +36,32 @@ const getInventoryValue = (product: ProductRow) => {
   return product.on_hand_qty * unitPrice;
 };
 
+const getProductDateTimestamp = (product: ProductRow) => {
+  const timestamp = Date.parse(product.created_at);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+};
+
+const sortProductsByDate = (products: ProductRow[], direction: DateSortDirection) =>
+  [...products].sort((left, right) => {
+    const dateDiff = getProductDateTimestamp(right) - getProductDateTimestamp(left);
+    const idDiff = right.id - left.id;
+    const newestFirstDiff = dateDiff || idDiff;
+
+    return direction === "desc" ? newestFirstDiff : -newestFirstDiff;
+  });
+
 export const InventoryProductsTable = ({ onSelectProduct, products }: InventoryProductsTableProps) => {
+  const [dateSortDirection, setDateSortDirection] = useState<DateSortDirection>("desc");
   const hasProductDetail = typeof onSelectProduct === "function";
+  const sortedProducts = useMemo(
+    () => sortProductsByDate(products, dateSortDirection),
+    [dateSortDirection, products]
+  );
+  const isLatestFirst = dateSortDirection === "desc";
+
+  const onToggleDateSort = () => {
+    setDateSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+  };
 
   return (
     <section className="panel panel-wide inventory-card inventory-card--products">
@@ -42,7 +70,21 @@ export const InventoryProductsTable = ({ onSelectProduct, products }: InventoryP
         <table className="inventory-products-table">
           <thead>
             <tr>
-              <th>Date</th>
+              <th aria-sort={isLatestFirst ? "descending" : "ascending"}>
+                <button
+                  aria-label={`Sort products by date, ${isLatestFirst ? "oldest first" : "latest first"}`}
+                  className="date-filter-btn"
+                  onClick={onToggleDateSort}
+                  title="Toggle date sort"
+                  type="button"
+                >
+                  <span>Date</span>
+                  <span className="date-filter-state">{isLatestFirst ? "Latest" : "Oldest"}</span>
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                    <path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13a1.5 1.5 0 0 1 1.1 2.52L14 13.56V18a1.5 1.5 0 0 1-.72 1.28l-2 1.22A1.5 1.5 0 0 1 9 19.22v-5.66L4.4 7.52A1.5 1.5 0 0 1 4 6.5Zm2.4.5 4.28 5.62c.2.26.32.58.32.91v4.8l1-.61v-4.19c0-.33.12-.65.32-.91L17.6 7H6.4Z" />
+                  </svg>
+                </button>
+              </th>
               <th>Product</th>
               <th>Quantity</th>
               <th className="align-right">Unit Price</th>
@@ -56,7 +98,7 @@ export const InventoryProductsTable = ({ onSelectProduct, products }: InventoryP
                 <td colSpan={6}>No products yet.</td>
               </tr>
             ) : (
-              products.map((product) => (
+              sortedProducts.map((product) => (
                 <tr key={product.id}>
                   <td>{formatDate(product.created_at)}</td>
                   <td>

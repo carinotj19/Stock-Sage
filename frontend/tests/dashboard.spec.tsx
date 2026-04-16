@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/App";
@@ -125,7 +125,7 @@ describe("Dashboard rendering", () => {
   });
 
   it("renders inventory products with totals and opens details from the eye action", async () => {
-    const product = {
+    const latestProduct = {
       id: 1,
       sku: "CPU-AMD-3300",
       name: "AMD Ryzen 3 3200",
@@ -140,6 +140,16 @@ describe("Dashboard rendering", () => {
       on_hand_qty: 22,
       created_at: "2026-04-09T00:00:00Z",
       updated_at: "2026-04-09T00:00:00Z"
+    };
+    const olderProduct = {
+      ...latestProduct,
+      id: 2,
+      sku: "RAM-DDR4-8GB",
+      name: "8GB DDR4 RAM",
+      sell_price: "1800.00",
+      on_hand_qty: 1,
+      created_at: "2026-04-01T00:00:00Z",
+      updated_at: "2026-04-01T00:00:00Z"
     };
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -162,7 +172,7 @@ describe("Dashboard rendering", () => {
       if (url.includes("/products")) {
         return {
           ok: true,
-          json: async () => [product]
+          json: async () => [olderProduct, latestProduct]
         };
       }
 
@@ -178,7 +188,7 @@ describe("Dashboard rendering", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
     expect(await screen.findByText("AMD Ryzen 3 3200")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Date" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /date/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Product" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Quantity" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Unit Price" })).toBeInTheDocument();
@@ -191,6 +201,19 @@ describe("Dashboard rendering", () => {
     expect(screen.getByText("₱99,000")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit product cpu-amd-3300/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete product cpu-amd-3300/i })).not.toBeInTheDocument();
+
+    const productRows = screen
+      .getAllByRole("row")
+      .filter((row) => within(row).queryByText("AMD Ryzen 3 3200") || within(row).queryByText("8GB DDR4 RAM"));
+    expect(within(productRows[0]).getByText("AMD Ryzen 3 3200")).toBeInTheDocument();
+    expect(within(productRows[1]).getByText("8GB DDR4 RAM")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /sort products by date, oldest first/i }));
+    const reversedRows = screen
+      .getAllByRole("row")
+      .filter((row) => within(row).queryByText("AMD Ryzen 3 3200") || within(row).queryByText("8GB DDR4 RAM"));
+    expect(within(reversedRows[0]).getByText("8GB DDR4 RAM")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sort products by date, latest first/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /view details for cpu-amd-3300/i }));
 
