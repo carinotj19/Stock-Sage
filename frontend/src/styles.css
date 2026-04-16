@@ -832,6 +832,77 @@ tbody tr:hover {
   align-self: center;
 }
 
+.inventory-products-table-wrap {
+  border: 1px solid #ece5d8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.inventory-products-table {
+  min-width: 760px;
+}
+
+.inventory-products-table th {
+  background: #f8f6f2;
+  padding: 0.72rem 0.85rem;
+}
+
+.inventory-products-table td {
+  padding: 0.76rem 0.85rem;
+  vertical-align: middle;
+}
+
+.inventory-product-name {
+  display: block;
+  font-weight: 800;
+  color: #2e3746;
+}
+
+.inventory-product-sku {
+  display: block;
+  margin-top: 0.14rem;
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.inventory-total-value {
+  font-weight: 800;
+  color: #2e3746;
+}
+
+.inventory-actions-heading,
+.inventory-actions-cell {
+  text-align: center;
+}
+
+.icon-action-btn {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-ink);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.icon-action-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.icon-action-btn:hover,
+.icon-action-btn:focus-visible {
+  border-color: #cbded7;
+  background: #eef6f3;
+  color: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
 .panel-wide {
   grid-column: 1 / -1;
 }
