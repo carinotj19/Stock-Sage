@@ -87,6 +87,20 @@ const App = () => {
       currency: "PHP",
       maximumFractionDigits: 0
     }).format(value);
+  const formatSnapshotCurrency = (value: number | string) => {
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return String(value);
+    return formatPHPCompact(numeric);
+  };
+  const formatSnapshotDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat("en-US", {
+      month: "numeric",
+      day: "numeric",
+      year: "numeric"
+    }).format(date);
+  };
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "inventory" | "transactions" | "settings">("dashboard");
   const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
@@ -454,6 +468,14 @@ const App = () => {
     setIsForecastModalLoading(false);
   };
 
+  const snapshotProducts = [...products].sort((left, right) => {
+    const leftUpdatedAt = new Date(left.updated_at).getTime();
+    const rightUpdatedAt = new Date(right.updated_at).getTime();
+    const updatedAtDiff = (Number.isNaN(rightUpdatedAt) ? 0 : rightUpdatedAt) - (Number.isNaN(leftUpdatedAt) ? 0 : leftUpdatedAt);
+    if (updatedAtDiff !== 0) return updatedAtDiff;
+    return left.name.localeCompare(right.name);
+  });
+
   if (authState.status !== "authenticated") {
     return (
       <AdminLogin
@@ -784,27 +806,67 @@ const App = () => {
           <section className="panel panel-wide transactions-card transactions-card--snapshot">
             <h2>Current Inventory Snapshot</h2>
             <div className="table-wrap">
-              <table>
+              <table className="transaction-snapshot-table">
                 <thead>
                   <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>On Hand</th>
+                    <th>Date</th>
+                    <th>Product</th>
+                    <th className="align-right">Quantity</th>
+                    <th className="align-right">Unit Price</th>
+                    <th className="align-right">Total</th>
+                    <th className="snapshot-actions-head">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {products.length === 0 ? (
+                  {snapshotProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={3}>No products loaded.</td>
+                      <td colSpan={6}>No products loaded.</td>
                     </tr>
                   ) : (
-                    products.map((product) => (
-                      <tr key={product.id}>
-                        <td>{product.sku}</td>
-                        <td>{product.name}</td>
-                        <td>{product.on_hand_qty}</td>
-                      </tr>
-                    ))
+                    snapshotProducts.map((product) => {
+                      const unitPrice = Number(product.sell_price);
+                      const rowTotal = Number.isNaN(unitPrice) ? 0 : product.on_hand_qty * unitPrice;
+
+                      return (
+                        <tr key={product.id}>
+                          <td className="snapshot-date">{formatSnapshotDate(product.updated_at)}</td>
+                          <td>
+                            <div className="snapshot-product-cell">
+                              <span className="snapshot-product-name">{product.name}</span>
+                              <span className="snapshot-product-sku">{product.sku}</span>
+                            </div>
+                          </td>
+                          <td className="align-right">{product.on_hand_qty}</td>
+                          <td className="align-right">{formatSnapshotCurrency(product.sell_price)}</td>
+                          <td className="align-right snapshot-total">{formatSnapshotCurrency(rowTotal)}</td>
+                          <td className="snapshot-actions">
+                            <button
+                              type="button"
+                              className="icon-action-btn"
+                              aria-label={`View details for ${product.name}`}
+                              title={`View forecast details for ${product.name}`}
+                              onClick={() => onOpenItemForecast(product.id)}
+                            >
+                              <svg
+                                aria-hidden="true"
+                                focusable="false"
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

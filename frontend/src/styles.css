@@ -1315,11 +1315,94 @@ tbody tr:hover {
 }
 
 .dashboard-grid--transactions > .transactions-card--sale {
-  grid-column: span 5;
+  grid-column: 1 / -1;
 }
 
 .dashboard-grid--transactions > .transactions-card--snapshot {
-  grid-column: span 7;
+  grid-column: 1 / -1;
+}
+
+.transactions-card--sale .form-grid {
+  max-width: 520px;
+}
+
+.transactions-card--snapshot .table-wrap {
+  border: 1px solid #f0e8db;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.transaction-snapshot-table {
+  min-width: 820px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.transaction-snapshot-table th {
+  background: #f3f4f6;
+  padding-top: 0.68rem;
+  padding-bottom: 0.68rem;
+}
+
+.transaction-snapshot-table th:first-child {
+  border-top-left-radius: 8px;
+}
+
+.transaction-snapshot-table th:last-child {
+  border-top-right-radius: 8px;
+}
+
+.transaction-snapshot-table td {
+  padding-top: 0.68rem;
+  padding-bottom: 0.68rem;
+}
+
+.snapshot-product-cell {
+  display: grid;
+  gap: 0.14rem;
+}
+
+.snapshot-product-name {
+  font-weight: 700;
+}
+
+.snapshot-product-sku {
+  color: var(--muted-ink);
+  font-size: 0.78rem;
+}
+
+.snapshot-date {
+  white-space: nowrap;
+}
+
+.snapshot-total {
+  font-weight: 800;
+}
+
+.snapshot-actions-head,
+.snapshot-actions {
+  text-align: center;
+}
+
+.icon-action-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-ink);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.icon-action-btn:hover,
+.icon-action-btn:focus-visible {
+  background: #eef6f3;
+  color: var(--accent-strong);
+  transform: translateY(-1px);
+  outline: none;
 }
 
 @media (max-width: 1080px) {

@@ -124,6 +124,78 @@ describe("Dashboard rendering", () => {
     );
   });
 
+  it("renders the transactions snapshot table with a product detail action", async () => {
+    const product = {
+      id: 1,
+      sku: "CPU-AMD-3300",
+      name: "AMD Ryzen 3 3200",
+      category: "CPU",
+      supplier_id: null,
+      cost_price: "3200.00",
+      sell_price: "4500.00",
+      reorder_min_qty: 1,
+      reorder_multiple: 1,
+      safety_stock: 10,
+      active: true,
+      on_hand_qty: 19,
+      created_at: "2026-04-09T00:00:00Z",
+      updated_at: "2026-04-10T00:00:00Z"
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (url.includes("/dashboard/item-forecast/1")) {
+        return {
+          ok: true,
+          json: async () => buildItemForecastDetail(365)
+        };
+      }
+
+      if (url.includes("/products")) {
+        return {
+          ok: true,
+          json: async () => [product]
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /transactions/i }));
+
+    expect(await screen.findByRole("heading", { name: "Current Inventory Snapshot" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Date" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Product" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Quantity" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Unit Price" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Total" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.getByText("AMD Ryzen 3 3200")).toBeInTheDocument();
+    expect(screen.getByText("CPU-AMD-3300")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /view details for amd ryzen 3 3200/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/dashboard/item-forecast/1?history_days=365"))).toBe(true);
+    });
+    expect(await screen.findByText("Sales history period")).toBeInTheDocument();
+  });
+
   it("allows editing a product from the inventory table", async () => {
     const product = {
       id: 1,
