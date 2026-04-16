@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AdminLogin } from "./components/AdminLogin";
 import { ForecastItemModal } from "./components/ForecastItemModal";
 import { InventoryProductsTable } from "./components/InventoryProductsTable";
@@ -12,6 +12,8 @@ import type {
   ProductRow,
   LowStockRow,
   PriceComparisonRow,
+  SaleTransactionPage,
+  SaleTransactionRow,
   ScraperSourceQualityRow,
   SalesTrendPoint,
   StockoutRow,
@@ -23,6 +25,7 @@ import type { InventoryProductUpdatePayload } from "./components/InventoryProduc
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 const ITEM_FORECAST_HISTORY_DAYS = 365;
+const TRANSACTION_PAGE_SIZE = 50;
 
 type AuthStatus = {
   authenticated: boolean;
@@ -87,18 +90,29 @@ const App = () => {
       currency: "PHP",
       maximumFractionDigits: 0
     }).format(value);
-  const formatSnapshotCurrency = (value: number | string) => {
+  const formatPHPWhole = (value: string | number) => {
     const numeric = Number(value);
     if (Number.isNaN(numeric)) return String(value);
     return formatPHPCompact(numeric);
   };
-  const formatSnapshotDate = (value: string) => {
+  const formatTransactionDate = (value: string) => {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "-";
     return new Intl.DateTimeFormat("en-US", {
       month: "numeric",
       day: "numeric",
       year: "numeric"
+    }).format(date);
+  };
+  const formatTransactionDateTime = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat("en-PH", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
     }).format(date);
   };
 
@@ -113,12 +127,23 @@ const App = () => {
   const [stockoutRows, setStockoutRows] = useState<StockoutRow[]>([]);
   const [priceRows, setPriceRows] = useState<PriceComparisonRow[]>([]);
   const [salesTrend, setSalesTrend] = useState<SalesTrendPoint[]>([]);
+  const [transactionRows, setTransactionRows] = useState<SaleTransactionRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [sourceQualityRows, setSourceQualityRows] = useState<ScraperSourceQualityRow[]>([]);
   const [selectedForecastProductId, setSelectedForecastProductId] = useState<number | null>(null);
   const [selectedForecastItem, setSelectedForecastItem] = useState<ItemForecastDetail | null>(null);
   const [isForecastModalLoading, setIsForecastModalLoading] = useState<boolean>(false);
   const [forecastModalError, setForecastModalError] = useState<string | null>(null);
+  const [selectedTransactionItemId, setSelectedTransactionItemId] = useState<number | null>(null);
+  const [transactionDateFilter, setTransactionDateFilter] = useState({
+    from: "",
+    to: ""
+  });
+  const [transactionDateSort, setTransactionDateSort] = useState<"asc" | "desc">("desc");
+  const [transactionPage, setTransactionPage] = useState(1);
+  const [transactionTotal, setTransactionTotal] = useState(0);
+  const [transactionTotalPages, setTransactionTotalPages] = useState(1);
+  const [isTransactionLoading, setIsTransactionLoading] = useState(false);
 
   const [newProduct, setNewProduct] = useState({
     sku: "",
@@ -152,6 +177,17 @@ const App = () => {
     0
   );
   const revenueToday = Number(salesTrend.find((point) => point.date === todayString)?.total_sales ?? 0);
+  const selectedTransaction = useMemo(
+    () =>
+      selectedTransactionItemId === null
+        ? null
+        : transactionRows.find((transaction) => transaction.item_id === selectedTransactionItemId) ?? null,
+    [selectedTransactionItemId, transactionRows]
+  );
+  const transactionPageCount = Math.max(1, transactionTotalPages);
+  const normalizedTransactionPage = Math.min(transactionPage, transactionPageCount);
+  const transactionRangeStart = transactionTotal === 0 ? 0 : (normalizedTransactionPage - 1) * TRANSACTION_PAGE_SIZE + 1;
+  const transactionRangeEnd = Math.min(normalizedTransactionPage * TRANSACTION_PAGE_SIZE, transactionTotal);
   const upcomingStockoutsCount = stockoutRows.filter((row) => {
     if (!row.predicted_stockout_date) return false;
     const daysLeft = Math.ceil((toDateOnlyTimestamp(row.predicted_stockout_date) - toDateOnlyTimestamp(todayString)) / 86400000);
@@ -176,10 +212,15 @@ const App = () => {
     setStockoutRows([]);
     setPriceRows([]);
     setSalesTrend([]);
+    setTransactionRows([]);
+    setTransactionTotal(0);
+    setTransactionTotalPages(1);
+    setTransactionPage(1);
     setProducts([]);
     setSourceQualityRows([]);
     setSelectedForecastProductId(null);
     setSelectedForecastItem(null);
+    setSelectedTransactionItemId(null);
     setApiError(null);
     setActionMessage(null);
     setLastUpdatedAt(null);
@@ -249,6 +290,65 @@ const App = () => {
     setAuthState({ status: "anonymous" });
   };
 
+  const applyLoadedProducts = (loadedProducts: ProductRow[]) => {
+    setProducts(loadedProducts);
+    if (!adjustStock.product_id && loadedProducts.length > 0) {
+      setAdjustStock((prev) => ({ ...prev, product_id: String(loadedProducts[0].id) }));
+    }
+    if (!newSale.product_id && loadedProducts.length > 0) {
+      setNewSale((prev) => ({ ...prev, product_id: String(loadedProducts[0].id) }));
+    }
+  };
+
+  const buildSalesPath = ({
+    page = transactionPage,
+    dateFilter = transactionDateFilter,
+    sort = transactionDateSort
+  }: {
+    page?: number;
+    dateFilter?: typeof transactionDateFilter;
+    sort?: typeof transactionDateSort;
+  } = {}) => {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(TRANSACTION_PAGE_SIZE),
+      sort
+    });
+    if (dateFilter.from) params.set("date_from", dateFilter.from);
+    if (dateFilter.to) params.set("date_to", dateFilter.to);
+    return `/sales?${params.toString()}`;
+  };
+
+  const applyTransactionPage = (pageData: SaleTransactionPage) => {
+    setTransactionRows(pageData.items);
+    setTransactionPage(pageData.page);
+    setTransactionTotal(pageData.total);
+    setTransactionTotalPages(pageData.total_pages);
+  };
+
+  const loadTransactionPage = async ({
+    page = transactionPage,
+    dateFilter = transactionDateFilter,
+    sort = transactionDateSort
+  }: {
+    page?: number;
+    dateFilter?: typeof transactionDateFilter;
+    sort?: typeof transactionDateSort;
+  } = {}) => {
+    setIsTransactionLoading(true);
+    try {
+      const pageData = await requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort }));
+      applyTransactionPage(pageData);
+      setApiError(null);
+      return true;
+    } catch (error) {
+      setApiError(`Cannot load transactions from ${API_BASE_URL}: ${String(error)}`);
+      return false;
+    } finally {
+      setIsTransactionLoading(false);
+    }
+  };
+
   const loadData = async () => {
     setIsLoading(true);
     setApiError(null);
@@ -260,25 +360,21 @@ const App = () => {
       requestJson<PriceComparisonRow[]>("/prices/compare"),
       requestJson<SalesTrendPoint[]>("/dashboard/sales-trend?days=30"),
       requestJson<ProductRow[]>("/products"),
-      requestJson<ScraperSourceQualityRow[]>("/dashboard/scraper-source-quality?window_hours=24")
+      requestJson<ScraperSourceQualityRow[]>("/dashboard/scraper-source-quality?window_hours=24"),
+      requestJson<SaleTransactionPage>(buildSalesPath())
     ]);
 
-    const [lowStockResult, stockoutResult, priceResult, salesResult, productResult, sourceQualityResult] = results;
+    const [lowStockResult, stockoutResult, priceResult, salesResult, productResult, sourceQualityResult, transactionResult] = results;
 
     if (lowStockResult.status === "fulfilled") setLowStock(lowStockResult.value);
     if (stockoutResult.status === "fulfilled") setStockoutRows(stockoutResult.value);
     if (priceResult.status === "fulfilled") setPriceRows(priceResult.value);
     if (salesResult.status === "fulfilled") setSalesTrend(salesResult.value);
     if (productResult.status === "fulfilled") {
-      setProducts(productResult.value);
-      if (!adjustStock.product_id && productResult.value.length > 0) {
-        setAdjustStock((prev) => ({ ...prev, product_id: String(productResult.value[0].id) }));
-      }
-      if (!newSale.product_id && productResult.value.length > 0) {
-        setNewSale((prev) => ({ ...prev, product_id: String(productResult.value[0].id) }));
-      }
+      applyLoadedProducts(productResult.value);
     }
     if (sourceQualityResult.status === "fulfilled") setSourceQualityRows(sourceQualityResult.value);
+    if (transactionResult.status === "fulfilled") applyTransactionPage(transactionResult.value);
 
     const firstError = results.find((item) => item.status === "rejected");
     if (firstError && firstError.status === "rejected") {
@@ -289,6 +385,40 @@ const App = () => {
 
     setLastUpdatedAt(new Date());
     setIsLoading(false);
+  };
+
+  const loadTransactionTabData = async ({
+    page = transactionPage,
+    dateFilter = transactionDateFilter,
+    sort = transactionDateSort
+  }: {
+    page?: number;
+    dateFilter?: typeof transactionDateFilter;
+    sort?: typeof transactionDateSort;
+  } = {}) => {
+    setIsLoading(true);
+    setApiError(null);
+
+    const results = await Promise.allSettled([
+      requestJson<ProductRow[]>("/products"),
+      requestJson<SalesTrendPoint[]>("/dashboard/sales-trend?days=30"),
+      requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort }))
+    ]);
+
+    const [productResult, salesResult, transactionResult] = results;
+
+    if (productResult.status === "fulfilled") applyLoadedProducts(productResult.value);
+    if (salesResult.status === "fulfilled") setSalesTrend(salesResult.value);
+    if (transactionResult.status === "fulfilled") applyTransactionPage(transactionResult.value);
+
+    const refreshFailed = results.some((item) => item.status === "rejected");
+    if (refreshFailed) {
+      setApiError(`Sale was saved, but latest transaction data could not be refreshed from ${API_BASE_URL}.`);
+    }
+
+    setLastUpdatedAt(new Date());
+    setIsLoading(false);
+    return !refreshFailed;
   };
 
   useEffect(() => {
@@ -447,9 +577,10 @@ const App = () => {
           ]
         })
       });
-      setActionMessage("Sale recorded.");
       setNewSale((prev) => ({ ...prev, qty: "1" }));
-      await loadData();
+      setTransactionDateSort("desc");
+      const refreshed = await loadTransactionTabData({ page: 1, sort: "desc" });
+      setActionMessage(refreshed ? "Sale recorded." : "Sale recorded, but the transaction table did not fully refresh.");
     } catch (error) {
       setActionMessage(`Record sale failed: ${String(error)}`);
     }
@@ -468,13 +599,27 @@ const App = () => {
     setIsForecastModalLoading(false);
   };
 
-  const snapshotProducts = [...products].sort((left, right) => {
-    const leftUpdatedAt = new Date(left.updated_at).getTime();
-    const rightUpdatedAt = new Date(right.updated_at).getTime();
-    const updatedAtDiff = (Number.isNaN(rightUpdatedAt) ? 0 : rightUpdatedAt) - (Number.isNaN(leftUpdatedAt) ? 0 : leftUpdatedAt);
-    if (updatedAtDiff !== 0) return updatedAtDiff;
-    return left.name.localeCompare(right.name);
-  });
+  const onChangeTransactionDateFilter = (field: "from" | "to", value: string) => {
+    const nextFilter = { ...transactionDateFilter, [field]: value };
+    setTransactionPage(1);
+    setTransactionDateFilter(nextFilter);
+    void loadTransactionPage({ page: 1, dateFilter: nextFilter });
+  };
+
+  const onToggleTransactionDateSort = () => {
+    const nextSort = transactionDateSort === "desc" ? "asc" : "desc";
+    setTransactionPage(1);
+    setTransactionDateSort(nextSort);
+    void loadTransactionPage({ page: 1, sort: nextSort });
+  };
+
+  const onCloseTransactionDetails = () => {
+    setSelectedTransactionItemId(null);
+  };
+
+  const onChangeTransactionPage = (page: number) => {
+    void loadTransactionPage({ page });
+  };
 
   if (authState.status !== "authenticated") {
     return (
@@ -806,70 +951,169 @@ const App = () => {
           <section className="panel panel-wide transactions-card transactions-card--snapshot">
             <h2>Current Inventory Snapshot</h2>
             <div className="table-wrap">
-              <table className="transaction-snapshot-table">
+              <table>
                 <thead>
                   <tr>
-                    <th>Date</th>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>On Hand</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.length === 0 ? (
+                    <tr>
+                      <td colSpan={3}>No products loaded.</td>
+                    </tr>
+                  ) : (
+                    products.map((product) => (
+                      <tr key={product.id}>
+                        <td>{product.sku}</td>
+                        <td>{product.name}</td>
+                        <td>{product.on_hand_qty}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel panel-wide transactions-card transactions-card--history">
+            <div className="panel-head transaction-history-head">
+              <div>
+                <h2>Transaction History</h2>
+                <p className="meta transaction-history-copy">Sales saved from Record Sale appear here.</p>
+              </div>
+              <div className="transaction-filters" aria-label="Transaction date filters">
+                <label className="transaction-filter-label">
+                  From
+                  <input
+                    type="date"
+                    value={transactionDateFilter.from}
+                    onChange={(event) => onChangeTransactionDateFilter("from", event.target.value)}
+                  />
+                </label>
+                <label className="transaction-filter-label">
+                  To
+                  <input
+                    type="date"
+                    value={transactionDateFilter.to}
+                    onChange={(event) => onChangeTransactionDateFilter("to", event.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="secondary-btn transaction-sort-toggle"
+                  onClick={onToggleTransactionDateSort}
+                >
+                  {transactionDateSort === "desc" ? "Latest first" : "Oldest first"}
+                </button>
+              </div>
+            </div>
+            <div className="table-wrap transaction-table-wrap">
+              <table className="transactions-table" aria-label="Transaction history">
+                <thead>
+                  <tr>
+                    <th>
+                      <button
+                        type="button"
+                        className="table-sort-btn"
+                        onClick={onToggleTransactionDateSort}
+                        aria-label={`Sort transactions by date, ${
+                          transactionDateSort === "desc" ? "oldest first" : "latest first"
+                        }`}
+                      >
+                        Date
+                        <span>{transactionDateSort === "desc" ? "Latest" : "Oldest"}</span>
+                      </button>
+                    </th>
                     <th>Product</th>
                     <th className="align-right">Quantity</th>
                     <th className="align-right">Unit Price</th>
                     <th className="align-right">Total</th>
-                    <th className="snapshot-actions-head">Actions</th>
+                    <th className="transaction-actions-head">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {snapshotProducts.length === 0 ? (
+                  {transactionRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>No products loaded.</td>
+                      <td colSpan={6}>
+                        {isTransactionLoading
+                          ? "Loading transactions..."
+                          : transactionTotal === 0 && (transactionDateFilter.from || transactionDateFilter.to)
+                            ? "No transactions match this date range."
+                            : "No transactions recorded yet."}
+                      </td>
                     </tr>
                   ) : (
-                    snapshotProducts.map((product) => {
-                      const unitPrice = Number(product.sell_price);
-                      const rowTotal = Number.isNaN(unitPrice) ? 0 : product.on_hand_qty * unitPrice;
-
-                      return (
-                        <tr key={product.id}>
-                          <td className="snapshot-date">{formatSnapshotDate(product.updated_at)}</td>
-                          <td>
-                            <div className="snapshot-product-cell">
-                              <span className="snapshot-product-name">{product.name}</span>
-                              <span className="snapshot-product-sku">{product.sku}</span>
-                            </div>
-                          </td>
-                          <td className="align-right">{product.on_hand_qty}</td>
-                          <td className="align-right">{formatSnapshotCurrency(product.sell_price)}</td>
-                          <td className="align-right snapshot-total">{formatSnapshotCurrency(rowTotal)}</td>
-                          <td className="snapshot-actions">
-                            <button
-                              type="button"
-                              className="icon-action-btn"
-                              aria-label={`View details for ${product.name}`}
-                              title={`View forecast details for ${product.name}`}
-                              onClick={() => onOpenItemForecast(product.id)}
+                    transactionRows.map((transaction) => (
+                      <tr key={transaction.item_id}>
+                        <td className="transaction-date">{formatTransactionDate(transaction.sold_at)}</td>
+                        <td>
+                          <div className="transaction-product-cell">
+                            <span className="transaction-product-name">{transaction.product_name}</span>
+                            <span className="transaction-product-sku">{transaction.sku}</span>
+                          </div>
+                        </td>
+                        <td className="align-right">{transaction.qty}</td>
+                        <td className="align-right">{formatPHPWhole(transaction.unit_sell_price)}</td>
+                        <td className="align-right transaction-total">{formatPHPWhole(transaction.line_total)}</td>
+                        <td className="transaction-actions">
+                          <button
+                            type="button"
+                            className="icon-action-btn"
+                            aria-label={`View receipt ${transaction.receipt_no}`}
+                            title={`View receipt ${transaction.receipt_no}`}
+                            onClick={() => setSelectedTransactionItemId(transaction.item_id)}
+                          >
+                            <svg
+                              aria-hidden="true"
+                              focusable="false"
+                              width="18"
+                              height="18"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
                             >
-                              <svg
-                                aria-hidden="true"
-                                focusable="false"
-                                width="18"
-                                height="18"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth={2}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              >
-                                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-                                <circle cx="12" cy="12" r="3" />
-                              </svg>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
+                              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          </button>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="transaction-pagination" aria-label="Transaction pagination">
+              <p className="meta">
+                Showing {transactionRangeStart}-{transactionRangeEnd} of {transactionTotal} transactions
+              </p>
+              <div className="transaction-pagination-actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  disabled={isTransactionLoading || normalizedTransactionPage <= 1}
+                  onClick={() => onChangeTransactionPage(Math.max(1, normalizedTransactionPage - 1))}
+                >
+                  Previous
+                </button>
+                <span className="transaction-page-count">
+                  Page {normalizedTransactionPage} of {transactionPageCount}
+                </span>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  disabled={isTransactionLoading || normalizedTransactionPage >= transactionPageCount}
+                  onClick={() => onChangeTransactionPage(Math.min(transactionPageCount, normalizedTransactionPage + 1))}
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </section>
         </section>
@@ -886,6 +1130,62 @@ const App = () => {
         error={forecastModalError}
         onClose={onCloseItemForecast}
       />
+
+      {selectedTransaction ? (
+        <div className="modal-overlay" role="presentation" onClick={onCloseTransactionDetails}>
+          <section
+            className="modal-card modal-card--state transaction-detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="transaction-detail-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button className="modal-close-btn" type="button" onClick={onCloseTransactionDetails} aria-label="Close receipt details">
+              x
+            </button>
+            <div className="modal-header">
+              <p className="kpi-label">Receipt</p>
+              <h2 id="transaction-detail-title">{selectedTransaction.receipt_no}</h2>
+              <p className="meta">{formatTransactionDateTime(selectedTransaction.sold_at)}</p>
+            </div>
+            <div className="transaction-detail-grid">
+              <article className="modal-metric">
+                <p className="kpi-label">Payment</p>
+                <p className="settings-stat-value">{selectedTransaction.payment_method ?? "-"}</p>
+              </article>
+              <article className="modal-metric">
+                <p className="kpi-label">Transaction Total</p>
+                <p className="settings-stat-value">{formatPHPWhole(selectedTransaction.total_amount)}</p>
+              </article>
+            </div>
+            <div className="table-wrap transaction-detail-table-wrap">
+              <table className="transactions-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="align-right">Quantity</th>
+                    <th className="align-right">Unit Price</th>
+                    <th className="align-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div className="transaction-product-cell">
+                        <span className="transaction-product-name">{selectedTransaction.product_name}</span>
+                        <span className="transaction-product-sku">{selectedTransaction.sku}</span>
+                      </div>
+                    </td>
+                    <td className="align-right">{selectedTransaction.qty}</td>
+                    <td className="align-right">{formatPHPWhole(selectedTransaction.unit_sell_price)}</td>
+                    <td className="align-right transaction-total">{formatPHPWhole(selectedTransaction.line_total)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 };

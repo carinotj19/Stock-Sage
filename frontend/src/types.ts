@@ -31,6 +31,29 @@ export type SalesTrendPoint = {
   transactions: number;
 };
 
+export type SaleTransactionRow = {
+  transaction_id: number;
+  item_id: number;
+  receipt_no: string;
+  sold_at: string;
+  product_id: number;
+  sku: string;
+  product_name: string;
+  qty: number;
+  unit_sell_price: string;
+  line_total: string;
+  total_amount: string;
+  payment_method: string | null;
+};
+
+export type SaleTransactionPage = {
+  items: SaleTransactionRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
 export type ScraperSourceQualityRow = {
   source_id: number;
   source_name: string;

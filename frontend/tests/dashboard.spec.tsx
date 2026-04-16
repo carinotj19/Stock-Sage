@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/App";
@@ -124,26 +124,120 @@ describe("Dashboard rendering", () => {
     );
   });
 
-  it("renders the transactions snapshot table with a product detail action", async () => {
-    const product = {
-      id: 1,
-      sku: "CPU-AMD-3300",
-      name: "AMD Ryzen 3 3200",
-      category: "CPU",
-      supplier_id: null,
-      cost_price: "3200.00",
-      sell_price: "4500.00",
-      reorder_min_qty: 1,
-      reorder_multiple: 1,
-      safety_stock: 10,
-      active: true,
-      on_hand_qty: 19,
-      created_at: "2026-04-09T00:00:00Z",
-      updated_at: "2026-04-10T00:00:00Z"
+  it("shows sales in transaction history, filters by date, and refreshes after recording a sale", async () => {
+    const products = [
+      {
+        id: 1,
+        sku: "RAM-8GB",
+        name: "8GB DDR4 RAM",
+        category: "RAM",
+        supplier_id: null,
+        cost_price: "1200.00",
+        sell_price: "1800.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 4,
+        active: true,
+        on_hand_qty: 8,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-02-02T00:00:00Z"
+      },
+      {
+        id: 2,
+        sku: "PSU-600W",
+        name: "600W PSU",
+        category: "PSU",
+        supplier_id: null,
+        cost_price: "1800.00",
+        sell_price: "2600.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 2,
+        active: true,
+        on_hand_qty: 5,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-02-01T00:00:00Z"
+      },
+      {
+        id: 3,
+        sku: "SSD-240GB",
+        name: "240GB SSD",
+        category: "SSD",
+        supplier_id: null,
+        cost_price: "1200.00",
+        sell_price: "1800.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 2,
+        active: true,
+        on_hand_qty: 7,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-02-03T00:00:00Z"
+      }
+    ];
+    let transactionRows = [
+      {
+        transaction_id: 1,
+        item_id: 1,
+        receipt_no: "R-001",
+        sold_at: "2026-02-01T08:00:00Z",
+        product_id: 2,
+        sku: "PSU-600W",
+        product_name: "600W PSU",
+        qty: 1,
+        unit_sell_price: "2600.00",
+        line_total: "2600.00",
+        total_amount: "2600.00",
+        payment_method: "cash"
+      },
+      {
+        transaction_id: 2,
+        item_id: 2,
+        receipt_no: "R-002",
+        sold_at: "2026-02-02T09:00:00Z",
+        product_id: 1,
+        sku: "RAM-8GB",
+        product_name: "8GB DDR4 RAM",
+        qty: 1,
+        unit_sell_price: "1800.00",
+        line_total: "1800.00",
+        total_amount: "1800.00",
+        payment_method: "card"
+      }
+    ];
+    const buildSalesPage = (url: string) => {
+      const parsedUrl = new URL(url);
+      const dateFrom = parsedUrl.searchParams.get("date_from") ?? "";
+      const dateTo = parsedUrl.searchParams.get("date_to") ?? "";
+      const sort = parsedUrl.searchParams.get("sort") ?? "desc";
+      const page = Number(parsedUrl.searchParams.get("page") ?? "1");
+      const pageSize = Number(parsedUrl.searchParams.get("page_size") ?? "50");
+      const rows = [...transactionRows]
+        .filter((transaction) => {
+          const soldAtDate = transaction.sold_at.slice(0, 10);
+          if (dateFrom && soldAtDate < dateFrom) return false;
+          if (dateTo && soldAtDate > dateTo) return false;
+          return true;
+        })
+        .sort((left, right) => {
+          const dateDiff = new Date(left.sold_at).getTime() - new Date(right.sold_at).getTime();
+          if (dateDiff !== 0) return sort === "asc" ? dateDiff : -dateDiff;
+          return sort === "asc" ? left.item_id - right.item_id : right.item_id - left.item_id;
+        });
+      const start = (page - 1) * pageSize;
+
+      return {
+        items: rows.slice(start, start + pageSize),
+        total: rows.length,
+        page,
+        page_size: pageSize,
+        total_pages: Math.max(1, Math.ceil(rows.length / pageSize))
+      };
     };
 
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
 
       if (url.includes("/auth/me")) {
         return {
@@ -152,17 +246,50 @@ describe("Dashboard rendering", () => {
         };
       }
 
-      if (url.includes("/dashboard/item-forecast/1")) {
+      if (pathname === "/sales" && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body));
+        const product = products.find((item) => item.id === payload.items[0].product_id) ?? products[0];
+        transactionRows = [
+          ...transactionRows,
+          {
+            transaction_id: 3,
+            item_id: 3,
+            receipt_no: "R-003",
+            sold_at: "2026-02-03T10:00:00Z",
+            product_id: product.id,
+            sku: product.sku,
+            product_name: product.name,
+            qty: payload.items[0].qty,
+            unit_sell_price: product.sell_price,
+            line_total: product.sell_price,
+            total_amount: product.sell_price,
+            payment_method: payload.payment_method
+          }
+        ];
         return {
           ok: true,
-          json: async () => buildItemForecastDetail(365)
+          json: async () => ({
+            id: 3,
+            receipt_no: "R-003",
+            sold_at: "2026-02-03T10:00:00Z",
+            total_amount: product.sell_price,
+            payment_method: payload.payment_method,
+            items: []
+          })
+        };
+      }
+
+      if (pathname === "/sales") {
+        return {
+          ok: true,
+          json: async () => buildSalesPage(url)
         };
       }
 
       if (url.includes("/products")) {
         return {
           ok: true,
-          json: async () => [product]
+          json: async () => products
         };
       }
 
@@ -178,22 +305,32 @@ describe("Dashboard rendering", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /transactions/i }));
 
-    expect(await screen.findByRole("heading", { name: "Current Inventory Snapshot" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Date" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Product" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Quantity" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Unit Price" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Total" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
-    expect(screen.getByText("AMD Ryzen 3 3200")).toBeInTheDocument();
-    expect(screen.getByText("CPU-AMD-3300")).toBeInTheDocument();
+    const historyTable = await screen.findByRole("table", { name: /transaction history/i });
+    const initialRows = within(historyTable).getAllByRole("row").map((row) => row.textContent ?? "");
+    expect(initialRows[1]).toContain("8GB DDR4 RAM");
+    expect(initialRows[2]).toContain("600W PSU");
 
-    fireEvent.click(screen.getByRole("button", { name: /view details for amd ryzen 3 3200/i }));
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-02-02" } });
+    await waitFor(() => {
+      expect(within(historyTable).getByText("8GB DDR4 RAM")).toBeInTheDocument();
+      expect(within(historyTable).queryByText("600W PSU")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(within(historyTable).getByRole("button", { name: /view receipt R-002/i }));
+    expect(await screen.findByRole("heading", { name: "R-002" })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Close receipt details"));
+
+    fireEvent.change(screen.getByLabelText("Product"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /save sale/i }));
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/dashboard/item-forecast/1?history_days=365"))).toBe(true);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/sales"),
+        expect.objectContaining({ method: "POST" })
+      );
     });
-    expect(await screen.findByText("Sales history period")).toBeInTheDocument();
+    expect(await screen.findByText("Sale recorded.")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("240GB SSD")).toBeInTheDocument();
   });
 
   it("allows editing a product from the inventory table", async () => {

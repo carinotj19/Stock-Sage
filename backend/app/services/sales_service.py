@@ -1,17 +1,89 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from math import ceil
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import InventoryBalance, Product, SalesItem, SalesTransaction, StockMovement
-from app.schemas.sales import SaleCreate, SaleItemRead, SaleRead
+from app.schemas.sales import SaleCreate, SaleItemRead, SaleRead, SaleTransactionLineRead, SaleTransactionPageRead
 
 
 class SalesService:
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    def list_sales(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort: str = "desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> SaleTransactionPageRead:
+        filters = []
+        if date_from is not None:
+            filters.append(SalesTransaction.sold_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+        if date_to is not None:
+            filters.append(
+                SalesTransaction.sold_at
+                < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            )
+
+        count_statement = (
+            select(func.count(SalesItem.id))
+            .join(SalesTransaction, SalesItem.sales_transaction_id == SalesTransaction.id)
+            .join(Product, Product.id == SalesItem.product_id)
+        )
+        if filters:
+            count_statement = count_statement.where(*filters)
+
+        total = int(self.db.scalar(count_statement) or 0)
+        total_pages = max(1, ceil(total / page_size))
+        offset = (page - 1) * page_size
+
+        statement = (
+            select(SalesTransaction, SalesItem, Product)
+            .join(SalesItem, SalesItem.sales_transaction_id == SalesTransaction.id)
+            .join(Product, Product.id == SalesItem.product_id)
+        )
+        if filters:
+            statement = statement.where(*filters)
+
+        order_direction = asc if sort == "asc" else desc
+        statement = statement.order_by(
+            order_direction(SalesTransaction.sold_at),
+            order_direction(SalesTransaction.id),
+            order_direction(SalesItem.id),
+        ).limit(page_size).offset(offset)
+
+        items = [
+            SaleTransactionLineRead(
+                transaction_id=transaction.id,
+                item_id=item.id,
+                receipt_no=transaction.receipt_no,
+                sold_at=transaction.sold_at,
+                product_id=product.id,
+                sku=product.sku,
+                product_name=product.name,
+                qty=item.qty,
+                unit_sell_price=item.unit_sell_price,
+                line_total=item.line_total,
+                total_amount=transaction.total_amount,
+                payment_method=transaction.payment_method,
+            )
+            for transaction, item, product in self.db.execute(statement).all()
+        ]
+        return SaleTransactionPageRead(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
 
     def create_sale(self, payload: SaleCreate) -> SaleRead:
         timestamp = payload.sold_at or datetime.now(timezone.utc)

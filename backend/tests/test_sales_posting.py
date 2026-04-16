@@ -62,6 +62,7 @@ def test_sales_posting_is_atomic_with_stock_movements() -> None:
         "/sales",
         json={
             "receipt_no": "RCPT-001",
+            "sold_at": "2026-02-02T10:30:00Z",
             "payment_method": "cash",
             "items": [{"product_id": product_id, "qty": 4}],
         },
@@ -82,6 +83,31 @@ def test_sales_posting_is_atomic_with_stock_movements() -> None:
         ).all()
         assert len(movement_rows) == 1
         assert movement_rows[0].qty_delta == -4
+
+    sales_resp = client.get("/sales")
+    assert sales_resp.status_code == 200
+    sales_page = sales_resp.json()
+    sales_rows = sales_page["items"]
+    assert sales_page["total"] == 1
+    assert sales_page["page"] == 1
+    assert sales_page["page_size"] == 50
+    assert sales_page["total_pages"] == 1
+    assert len(sales_rows) == 1
+    assert sales_rows[0]["receipt_no"] == "RCPT-001"
+    assert sales_rows[0]["product_name"] == "Bread"
+    assert sales_rows[0]["qty"] == 4
+    assert sales_rows[0]["unit_sell_price"] == "2.00"
+    assert sales_rows[0]["line_total"] == "8.00"
+
+    filtered_sales_resp = client.get("/sales?date_from=2026-02-02&date_to=2026-02-02")
+    assert filtered_sales_resp.status_code == 200
+    assert filtered_sales_resp.json()["total"] == 1
+    assert len(filtered_sales_resp.json()["items"]) == 1
+
+    empty_sales_resp = client.get("/sales?date_from=2026-02-03")
+    assert empty_sales_resp.status_code == 200
+    assert empty_sales_resp.json()["total"] == 0
+    assert empty_sales_resp.json()["items"] == []
 
     bad_sale_resp = client.post(
         "/sales",
