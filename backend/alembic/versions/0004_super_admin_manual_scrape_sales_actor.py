@@ -1,6 +1,6 @@
 """add super admin support and sales actor
 
-Revision ID: 0004_super_admin_manual_scrape_sales_actor
+Revision ID: 0004_super_admin_sales_actor
 Revises: 0003_user_roles_audit_logs
 Create Date: 2026-04-22 00:00:00
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0004_super_admin_manual_scrape_sales_actor"
+revision: str = "0004_super_admin_sales_actor"
 down_revision: Union[str, None] = "0003_user_roles_audit_logs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
