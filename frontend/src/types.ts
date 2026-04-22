@@ -152,6 +152,21 @@ export type ManualScrapeRunResult = {
   message: string;
 };
 
+export type ManualScrapeJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  progress_pct: number;
+  current_source: string | null;
+  inserted_rows: number;
+  total_sources: number;
+  completed_sources: number;
+  started_at: string;
+  finished_at: string | null;
+  message: string;
+  error: string | null;
+  logs: string[];
+};
+
 export type AuditLogRow = {
   id: number;
   actor_username: string;

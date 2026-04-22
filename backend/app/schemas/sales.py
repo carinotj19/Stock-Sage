@@ -14,6 +14,7 @@ class SaleCreate(BaseModel):
     receipt_no: str | None = Field(default=None, max_length=64)
     sold_at: datetime | None = None
     payment_method: str | None = Field(default=None, max_length=50)
+    ordered_by_username: str | None = Field(default=None, max_length=100)
     items: list[SaleItemCreate] = Field(min_length=1)
 
 

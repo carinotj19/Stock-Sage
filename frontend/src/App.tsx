@@ -9,7 +9,7 @@ import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
 import type {
   ItemForecastDetail,
-  ManualScrapeRunResult,
+  ManualScrapeJobStatus,
   ProductRow,
   LowStockRow,
   PriceComparisonRow,
@@ -27,8 +27,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 const ITEM_FORECAST_HISTORY_DAYS = 365;
 const TRANSACTION_PAGE_SIZE = 50;
+const SCRAPE_JOB_POLL_INTERVAL_MS = 1000;
 
 const isAdminRole = (role: UserRole | null) => role === "admin" || role === "super_admin";
+const isScrapeJobRunning = (job: ManualScrapeJobStatus | null) => job?.status === "queued" || job?.status === "running";
 
 type AuthStatus = {
   authenticated: boolean;
@@ -126,6 +128,9 @@ const App = () => {
   const [apiError, setApiError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isScraping, setIsScraping] = useState<boolean>(false);
+  const [scrapeJob, setScrapeJob] = useState<ManualScrapeJobStatus | null>(null);
+  const [scrapeJobId, setScrapeJobId] = useState<string | null>(null);
+  const [isScrapeConsoleOpen, setIsScrapeConsoleOpen] = useState<boolean>(false);
 
   const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
   const [stockoutRows, setStockoutRows] = useState<StockoutRow[]>([]);
@@ -168,6 +173,7 @@ const App = () => {
   const [newSale, setNewSale] = useState({
     product_id: "",
     qty: "1",
+    ordered_by_username: "",
     payment_method: "cash"
   });
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -443,6 +449,49 @@ const App = () => {
   }, [activeTab, authState]);
 
   useEffect(() => {
+    if (authState.status !== "authenticated" || newSale.ordered_by_username.trim()) return;
+    setNewSale((prev) => ({ ...prev, ordered_by_username: authState.displayName }));
+  }, [authState, newSale.ordered_by_username]);
+
+  useEffect(() => {
+    if (!scrapeJobId || !isScrapeJobRunning(scrapeJob)) return;
+
+    let isCancelled = false;
+
+    const pollScrapeJob = async () => {
+      try {
+        const nextJob = await requestJson<ManualScrapeJobStatus>(`/prices/scrape/jobs/${scrapeJobId}`);
+        if (isCancelled) return;
+
+        setScrapeJob(nextJob);
+        setIsScraping(isScrapeJobRunning(nextJob));
+
+        if (nextJob.status === "completed") {
+          setActionMessage(`Manual web scraping completed. ${nextJob.inserted_rows} competitor price snapshots saved.`);
+          await loadData();
+        }
+        if (nextJob.status === "failed") {
+          setActionMessage(nextJob.error ? `Manual web scraping failed: ${nextJob.error}` : nextJob.message);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setIsScraping(false);
+          setActionMessage(`Manual web scraping status check failed: ${String(error)}`);
+        }
+      }
+    };
+
+    void pollScrapeJob();
+    const intervalId = window.setInterval(() => void pollScrapeJob(), SCRAPE_JOB_POLL_INTERVAL_MS);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrapeJobId, scrapeJob?.status]);
+
+  useEffect(() => {
     if (selectedForecastProductId === null) return;
 
     let isCancelled = false;
@@ -573,6 +622,7 @@ const App = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           payment_method: newSale.payment_method,
+          ordered_by_username: newSale.ordered_by_username.trim(),
           items: [
             {
               product_id: Number(newSale.product_id),
@@ -604,19 +654,67 @@ const App = () => {
   };
 
   const onRunManualScrape = async () => {
-    setActionMessage("Manual web scraping started.");
+    setActionMessage(null);
     setApiError(null);
     setIsScraping(true);
+    setIsScrapeConsoleOpen(false);
     try {
-      const result = await requestJson<ManualScrapeRunResult>("/prices/scrape", { method: "POST" });
-      await loadData();
-      setActionMessage(`Manual web scraping completed. ${result.inserted_rows} competitor price snapshots saved.`);
+      const job = await requestJson<ManualScrapeJobStatus>("/prices/scrape/jobs", { method: "POST" });
+      setScrapeJob(job);
+      setScrapeJobId(job.job_id);
+      setIsScraping(isScrapeJobRunning(job));
     } catch (error) {
       setActionMessage(`Manual web scraping failed: ${String(error)}`);
-    } finally {
+      setScrapeJob(null);
+      setScrapeJobId(null);
       setIsScraping(false);
     }
   };
+
+  const onCloseScrapeModal = () => {
+    if (isScrapeJobRunning(scrapeJob)) return;
+    setScrapeJob(null);
+    setScrapeJobId(null);
+    setIsScrapeConsoleOpen(false);
+  };
+
+  const onToggleScrapeConsole = () => {
+    setIsScrapeConsoleOpen((prev) => !prev);
+  };
+
+  const formatScrapeElapsed = (job: ManualScrapeJobStatus | null) => {
+    if (!job) return "--";
+    const startedAt = new Date(job.started_at).getTime();
+    if (Number.isNaN(startedAt)) return "--";
+    const finishedAt = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+    const elapsedSeconds = Math.max(0, Math.floor((finishedAt - startedAt) / 1000));
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    if (minutes <= 0) return `${seconds}s`;
+    return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  };
+
+  const scrapeModalTitle = (() => {
+    if (!scrapeJob) return "Manual Web Scrape";
+    if (scrapeJob.status === "completed") return "Manual Web Scrape Complete";
+    if (scrapeJob.status === "failed") return "Manual Web Scrape Failed";
+    return "Manual Web Scrape";
+  })();
+
+  const scrapeProgressLabel = (() => {
+    if (!scrapeJob) return "0%";
+    if (scrapeJob.total_sources > 0) {
+      return `${scrapeJob.completed_sources}/${scrapeJob.total_sources} sources`;
+    }
+    return `${scrapeJob.progress_pct}%`;
+  })();
+  const scrapeCurrentLabel = (() => {
+    if (!scrapeJob) return "Waiting to start";
+    if (scrapeJob.current_source) return scrapeJob.current_source;
+    if (scrapeJob.status === "completed") return "Completed";
+    if (scrapeJob.status === "failed") return "Failed";
+    return "Preparing sources";
+  })();
 
   const onChangeTransactionDateFilter = (field: "from" | "to", value: string) => {
     const nextFilter = { ...transactionDateFilter, [field]: value };
@@ -953,6 +1051,14 @@ const App = () => {
                 />
               </label>
               <label>
+                Ordered By
+                <input
+                  value={newSale.ordered_by_username}
+                  onChange={(event) => setNewSale((prev) => ({ ...prev, ordered_by_username: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
                 Payment Method
                 <select
                   value={newSale.payment_method}
@@ -1149,6 +1255,93 @@ const App = () => {
           requestJson={requestJson}
           onProductsChanged={loadData}
         />
+      ) : null}
+
+      {scrapeJob ? (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={isScrapeJobRunning(scrapeJob) ? undefined : onCloseScrapeModal}
+        >
+          <section
+            className="modal-card scrape-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scrape-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close-btn"
+              type="button"
+              onClick={onCloseScrapeModal}
+              aria-label="Close manual web scrape progress"
+              disabled={isScrapeJobRunning(scrapeJob)}
+              title={isScrapeJobRunning(scrapeJob) ? "Scrape is still running" : "Close"}
+            >
+              x
+            </button>
+            <div className="modal-header scrape-modal-header">
+              <p className="kpi-label">Web Scraper</p>
+              <h2 id="scrape-modal-title">{scrapeModalTitle}</h2>
+              <p className="meta">{scrapeJob.message}</p>
+            </div>
+
+            <div className="scrape-progress-summary">
+              <article className="modal-metric">
+                <p className="kpi-label">Progress</p>
+                <p className="settings-stat-value">{scrapeJob.progress_pct}%</p>
+              </article>
+              <article className="modal-metric">
+                <p className="kpi-label">Snapshots</p>
+                <p className="settings-stat-value">{scrapeJob.inserted_rows}</p>
+              </article>
+              <article className="modal-metric">
+                <p className="kpi-label">Elapsed</p>
+                <p className="settings-stat-value">{formatScrapeElapsed(scrapeJob)}</p>
+              </article>
+            </div>
+
+            <div className="scrape-progress-block">
+              <div className="scrape-progress-line">
+                <span>{scrapeCurrentLabel}</span>
+                <span>{scrapeProgressLabel}</span>
+              </div>
+              <div
+                className="scrape-progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={scrapeJob.progress_pct}
+                aria-label="Manual web scrape progress"
+              >
+                <div className="scrape-progress-fill" style={{ width: `${scrapeJob.progress_pct}%` }} />
+              </div>
+            </div>
+
+            {scrapeJob.status === "failed" ? (
+              <p className="status status-error scrape-modal-error">{scrapeJob.error ?? scrapeJob.message}</p>
+            ) : null}
+
+            <div className="scrape-console-shell">
+              <button className="secondary-btn scrape-console-toggle" type="button" onClick={onToggleScrapeConsole}>
+                {isScrapeConsoleOpen ? "Hide Debug Console" : "Show Debug Console"}
+              </button>
+              {isScrapeConsoleOpen ? (
+                <pre className="scrape-debug-console" aria-label="Manual web scrape debug console">
+                  {scrapeJob.logs.length > 0 ? scrapeJob.logs.join("\n") : "No debug logs yet."}
+                </pre>
+              ) : null}
+            </div>
+
+            {!isScrapeJobRunning(scrapeJob) ? (
+              <div className="scrape-modal-actions">
+                <button className="primary-btn" type="button" onClick={onCloseScrapeModal}>
+                  Close
+                </button>
+              </div>
+            ) : null}
+          </section>
+        </div>
       ) : null}
 
       <ForecastItemModal

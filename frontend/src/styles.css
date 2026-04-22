@@ -1010,6 +1010,11 @@ tbody tr:hover {
   background: #f2ece0;
 }
 
+.modal-close-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .modal-header {
   margin-bottom: 0.8rem;
 }
@@ -1145,6 +1150,89 @@ tbody tr:hover {
 .modal-warning {
   border-color: #fdc993;
   background: #fff4e5;
+}
+
+.scrape-modal {
+  width: min(720px, 100%);
+}
+
+.scrape-modal-header .meta {
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.scrape-progress-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0.85rem 0;
+}
+
+.scrape-progress-block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffdf8;
+  padding: 0.82rem;
+}
+
+.scrape-progress-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  color: var(--muted-ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.scrape-progress-track {
+  margin-top: 0.58rem;
+  height: 14px;
+  border: 1px solid #d8ece4;
+  border-radius: 999px;
+  background: #eef6f3;
+  overflow: hidden;
+}
+
+.scrape-progress-fill {
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), #56b39e);
+  transition: width 240ms ease;
+}
+
+.scrape-modal-error {
+  margin-top: 0.75rem;
+}
+
+.scrape-console-shell {
+  margin-top: 0.85rem;
+}
+
+.scrape-console-toggle {
+  width: 100%;
+}
+
+.scrape-debug-console {
+  max-height: 220px;
+  margin: 0.7rem 0 0;
+  overflow: auto;
+  border: 1px solid #d8ccb7;
+  border-radius: 10px;
+  background: #132135;
+  color: #e8f6f2;
+  padding: 0.8rem;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.scrape-modal-actions {
+  margin-top: 0.9rem;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .modal-chart {
@@ -1626,6 +1714,15 @@ tbody tr:hover {
 
   .transaction-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .scrape-progress-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .scrape-progress-line {
+    flex-direction: column;
+    gap: 0.25rem;
   }
 
   .modal-demand-grid {

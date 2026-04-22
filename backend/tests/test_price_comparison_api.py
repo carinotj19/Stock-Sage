@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
+import time
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -193,3 +194,74 @@ def test_price_comparison_ignores_out_of_stock_offer_for_cheapest_benchmark() ->
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+
+
+def test_manual_scrape_job_reports_progress(monkeypatch) -> None:
+    def fake_scraper(*, progress_callback=None, **_kwargs):
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "cycle_start",
+                    "total_sources": 2,
+                    "completed_sources": 0,
+                    "inserted_rows": 0,
+                    "message": "Scraper started with 2 sources and 1 active products.",
+                }
+            )
+            progress_callback(
+                {
+                    "event": "source_start",
+                    "source_index": 1,
+                    "total_sources": 2,
+                    "completed_sources": 0,
+                    "source_name": "Shop A",
+                    "inserted_rows": 0,
+                    "message": "Checking Shop A (1/2).",
+                }
+            )
+            progress_callback(
+                {
+                    "event": "source_done",
+                    "source_index": 1,
+                    "total_sources": 2,
+                    "completed_sources": 1,
+                    "source_name": "Shop A",
+                    "inserted_rows": 2,
+                    "message": "Finished Shop A: 2 snapshots saved.",
+                }
+            )
+            progress_callback(
+                {
+                    "event": "cycle_done",
+                    "total_sources": 2,
+                    "completed_sources": 2,
+                    "inserted_rows": 3,
+                    "message": "Scraper completed with 3 snapshots saved.",
+                }
+            )
+        return 3
+
+    monkeypatch.setattr("app.api.routes_prices.run_scraper_cycle", fake_scraper)
+
+    app = create_app()
+    client = TestClient(app)
+
+    start_response = client.post("/prices/scrape/jobs")
+    assert start_response.status_code == 202
+    job_id = start_response.json()["job_id"]
+
+    final_payload = None
+    for _ in range(20):
+        status_response = client.get(f"/prices/scrape/jobs/{job_id}")
+        assert status_response.status_code == 200
+        final_payload = status_response.json()
+        if final_payload["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert final_payload is not None
+    assert final_payload["status"] == "completed"
+    assert final_payload["progress_pct"] == 100
+    assert final_payload["inserted_rows"] == 3
+    assert final_payload["completed_sources"] == 2
+    assert any("Shop A" in line for line in final_payload["logs"])

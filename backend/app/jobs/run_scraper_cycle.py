@@ -22,6 +22,7 @@ from app.scrapers.playwright_scraper import fetch_html_with_playwright
 
 
 FetchHtmlFn = Callable[[CompetitorSource, dict[str, Any]], str]
+ScraperProgressCallback = Callable[[dict[str, Any]], None]
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_TOKENS = {"with", "and", "for", "the", "series", "processor", "graphics", "card", "motherboard"}
@@ -50,6 +51,12 @@ def _emit(message: str) -> None:
         encoding = (getattr(sys.stdout, "encoding", None) or "utf-8").lower()
         safe = message.encode(encoding, errors="replace").decode(encoding, errors="replace")
         print(safe)
+
+
+def _notify_progress(progress_callback: ScraperProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(payload)
 
 
 def _normalize_filters(filters: list[str] | None) -> list[str]:
@@ -886,6 +893,7 @@ def run_scraper_cycle(
     verbose: bool = False,
     source_name_filters: list[str] | None = None,
     exclude_source_name_filters: list[str] | None = None,
+    progress_callback: ScraperProgressCallback | None = None,
 ) -> int:
     own_session = db is None
     session = db or SessionLocal()
@@ -901,14 +909,35 @@ def run_scraper_cycle(
         )
         active_products = list(session.scalars(select(Product).where(Product.active.is_(True))).all())
         if not sources:
-            _emit(
+            message = (
                 "scraper_cycle_warning detail=no_sources_selected "
                 f"enabled_sources={len(all_sources)} "
                 f"source_name_filters={source_name_filters or []} "
                 f"exclude_source_name_filters={exclude_source_name_filters or []}"
             )
+            _emit(message)
+            _notify_progress(
+                progress_callback,
+                event="cycle_done",
+                total_sources=0,
+                completed_sources=0,
+                inserted_rows=0,
+                message=message,
+            )
             return 0
 
+        _notify_progress(
+            progress_callback,
+            event="cycle_start",
+            total_sources=len(sources),
+            completed_sources=0,
+            active_products=len(active_products),
+            inserted_rows=0,
+            message=(
+                f"Scraper started with {len(sources)} sources and "
+                f"{len(active_products)} active products."
+            ),
+        )
         _log(
             verbose,
             (
@@ -916,13 +945,23 @@ def run_scraper_cycle(
                 f"active_products={len(active_products)} started_at={datetime.now(timezone.utc).isoformat()}"
             ),
         )
-        for source in sources:
+        for source_index, source in enumerate(sources, start=1):
             source_inserted = 0
             source_config_updated = False
             source_started = perf_counter()
             try:
                 config = _load_config(source)
                 mode = str(config.get("mode", "standard")).strip().lower()
+                _notify_progress(
+                    progress_callback,
+                    event="source_start",
+                    source_index=source_index,
+                    total_sources=len(sources),
+                    completed_sources=source_index - 1,
+                    source_name=source.name,
+                    inserted_rows=inserted_rows,
+                    message=f"Checking {source.name} ({source_index}/{len(sources)}) using {mode}.",
+                )
                 _log(verbose, f"scraper_source_start source={source.name} mode={mode}")
                 if mode == "per_product_search":
                     source_inserted, source_config_updated = _run_per_product_source(
@@ -965,6 +1004,21 @@ def run_scraper_cycle(
                 session.commit()
                 inserted_rows += source_inserted
                 elapsed = perf_counter() - source_started
+                _notify_progress(
+                    progress_callback,
+                    event="source_done",
+                    source_index=source_index,
+                    total_sources=len(sources),
+                    completed_sources=source_index,
+                    source_name=source.name,
+                    source_inserted=source_inserted,
+                    inserted_rows=inserted_rows,
+                    elapsed_seconds=elapsed,
+                    message=(
+                        f"Finished {source.name}: {source_inserted} snapshots saved "
+                        f"in {elapsed:.2f}s."
+                    ),
+                )
                 _log(
                     verbose,
                     (
@@ -974,9 +1028,28 @@ def run_scraper_cycle(
                 )
             except Exception as exc:
                 session.rollback()
-                _emit(f"scraper_source_error source={source.name} detail={exc}")
+                message = f"scraper_source_error source={source.name} detail={exc}"
+                _emit(message)
+                _notify_progress(
+                    progress_callback,
+                    event="source_error",
+                    source_index=source_index,
+                    total_sources=len(sources),
+                    completed_sources=source_index,
+                    source_name=source.name,
+                    inserted_rows=inserted_rows,
+                    message=message,
+                )
                 continue
 
+        _notify_progress(
+            progress_callback,
+            event="cycle_done",
+            total_sources=len(sources),
+            completed_sources=len(sources),
+            inserted_rows=inserted_rows,
+            message=f"Scraper completed with {inserted_rows} snapshots saved.",
+        )
         _log(
             verbose,
             (

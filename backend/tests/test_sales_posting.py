@@ -190,6 +190,7 @@ def test_authenticated_sales_posting_does_not_conflict_with_auth_session_transac
         json={
             "receipt_no": "AUTH-RCPT-001",
             "payment_method": "cash",
+            "ordered_by_username": "Front Desk",
             "items": [{"product_id": product_resp.json()["id"], "qty": 2}],
         },
     )
@@ -199,11 +200,11 @@ def test_authenticated_sales_posting_does_not_conflict_with_auth_session_transac
     assert product_resp.status_code == 200
     assert sale_resp.status_code == 200
     assert sale_resp.json()["total_amount"] == "4.00"
-    assert sale_resp.json()["ordered_by_username"] == "admin"
+    assert sale_resp.json()["ordered_by_username"] == "Front Desk"
 
     sales_resp = client.get("/sales")
     assert sales_resp.status_code == 200
-    assert sales_resp.json()["items"][0]["ordered_by_username"] == "admin"
+    assert sales_resp.json()["items"][0]["ordered_by_username"] == "Front Desk"
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)

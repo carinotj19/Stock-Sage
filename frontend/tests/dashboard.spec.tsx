@@ -90,6 +90,7 @@ describe("Dashboard rendering", () => {
   });
 
   it("runs manual web scraping from the dashboard toolbar", async () => {
+    let scrapePolls = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -100,13 +101,43 @@ describe("Dashboard rendering", () => {
         };
       }
 
-      if (url.endsWith("/prices/scrape") && init?.method === "POST") {
+      if (url.endsWith("/prices/scrape/jobs") && init?.method === "POST") {
         return {
           ok: true,
           json: async () => ({
+            job_id: "job-1",
+            status: "running",
+            progress_pct: 15,
+            current_source: "DynaQuest - Inventory Search",
+            inserted_rows: 0,
+            total_sources: 2,
+            completed_sources: 0,
+            started_at: "2026-04-22T00:00:00Z",
+            finished_at: null,
+            message: "Checking DynaQuest - Inventory Search (1/2).",
+            error: null,
+            logs: ["[12:00:00] Manual web scraping queued.", "[12:00:01] Checking DynaQuest."]
+          })
+        };
+      }
+
+      if (url.endsWith("/prices/scrape/jobs/job-1")) {
+        scrapePolls += 1;
+        return {
+          ok: true,
+          json: async () => ({
+            job_id: "job-1",
+            status: "completed",
+            progress_pct: 100,
+            current_source: null,
             inserted_rows: 3,
-            ran_at: "2026-04-22T00:00:00Z",
-            message: "Manual web scraping completed with 3 snapshots saved."
+            total_sources: 2,
+            completed_sources: 2,
+            started_at: "2026-04-22T00:00:00Z",
+            finished_at: "2026-04-22T00:00:05Z",
+            message: "Manual web scraping completed. 3 competitor price snapshots saved.",
+            error: null,
+            logs: ["[12:00:00] Manual web scraping queued.", "[12:00:05] Scraper completed."]
           })
         };
       }
@@ -122,12 +153,22 @@ describe("Dashboard rendering", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /run web scrape/i }));
 
+    expect(await screen.findByRole("dialog", { name: /manual web scrape/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("progressbar", { name: /manual web scrape progress/i })).toHaveAttribute(
+        "aria-valuenow",
+        "100"
+      );
+    });
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/prices/scrape"),
+        expect.stringContaining("/prices/scrape/jobs"),
         expect.objectContaining({ method: "POST" })
       );
     });
+    expect(scrapePolls).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /show debug console/i }));
+    expect(await screen.findByLabelText("Manual web scrape debug console")).toHaveTextContent("Scraper completed.");
     expect(await screen.findByText("Manual web scraping completed. 3 competitor price snapshots saved.")).toBeInTheDocument();
   });
 
@@ -308,7 +349,7 @@ describe("Dashboard rendering", () => {
             line_total: product.sell_price,
             total_amount: product.sell_price,
             payment_method: payload.payment_method,
-            ordered_by_username: "admin"
+            ordered_by_username: payload.ordered_by_username
           }
         ];
         return {
@@ -319,6 +360,7 @@ describe("Dashboard rendering", () => {
             sold_at: "2026-02-03T10:00:00Z",
             total_amount: product.sell_price,
             payment_method: payload.payment_method,
+            ordered_by_username: payload.ordered_by_username,
             items: []
           })
         };
@@ -368,6 +410,7 @@ describe("Dashboard rendering", () => {
     fireEvent.click(screen.getByLabelText("Close receipt details"));
 
     fireEvent.change(screen.getByLabelText("Product"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("Ordered By"), { target: { value: "Counter Staff" } });
     fireEvent.click(screen.getByRole("button", { name: /save sale/i }));
 
     await waitFor(() => {
@@ -376,8 +419,15 @@ describe("Dashboard rendering", () => {
         expect.objectContaining({ method: "POST" })
       );
     });
+    const salePostCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input).includes("/sales") && init?.method === "POST"
+    );
+    expect(JSON.parse(String(salePostCall?.[1]?.body))).toEqual(
+      expect.objectContaining({ ordered_by_username: "Counter Staff" })
+    );
     expect(await screen.findByText("Sale recorded.")).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("240GB SSD")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("Counter Staff")).toBeInTheDocument();
   });
 
   it("allows editing a product from the inventory table", async () => {
