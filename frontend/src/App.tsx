@@ -131,6 +131,7 @@ const App = () => {
   const [scrapeJob, setScrapeJob] = useState<ManualScrapeJobStatus | null>(null);
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(null);
   const [isScrapeConsoleOpen, setIsScrapeConsoleOpen] = useState<boolean>(false);
+  const [saleNotification, setSaleNotification] = useState<string | null>(null);
 
   const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
   const [stockoutRows, setStockoutRows] = useState<StockoutRow[]>([]);
@@ -492,6 +493,12 @@ const App = () => {
   }, [scrapeJobId, scrapeJob?.status]);
 
   useEffect(() => {
+    if (!saleNotification) return;
+    const timeoutId = window.setTimeout(() => setSaleNotification(null), 4200);
+    return () => window.clearTimeout(timeoutId);
+  }, [saleNotification]);
+
+  useEffect(() => {
     if (selectedForecastProductId === null) return;
 
     let isCancelled = false;
@@ -634,7 +641,13 @@ const App = () => {
       setNewSale((prev) => ({ ...prev, qty: "1" }));
       setTransactionDateSort("desc");
       const refreshed = await loadTransactionTabData({ page: 1, sort: "desc" });
-      setActionMessage(refreshed ? "Sale recorded." : "Sale recorded, but the transaction table did not fully refresh.");
+      if (refreshed) {
+        setActionMessage("Sale recorded.");
+        setSaleNotification("Sale recorded.");
+      } else {
+        setActionMessage("Sale recorded, but the transaction table did not fully refresh.");
+        setSaleNotification("Sale recorded. Transaction refresh needs attention.");
+      }
     } catch (error) {
       setActionMessage(`Record sale failed: ${String(error)}`);
     }
@@ -751,6 +764,26 @@ const App = () => {
 
   return (
     <main className="dashboard-shell">
+      {saleNotification ? (
+        <div className="toast-notification toast-notification--success" role="status" aria-live="polite">
+          <div className="toast-notification-icon" aria-hidden="true">
+            ✓
+          </div>
+          <div>
+            <p className="toast-notification-title">{saleNotification}</p>
+            <p className="toast-notification-copy">Transaction history has been updated.</p>
+          </div>
+          <button
+            className="toast-notification-close"
+            type="button"
+            onClick={() => setSaleNotification(null)}
+            aria-label="Dismiss sale notification"
+          >
+            x
+          </button>
+        </div>
+      ) : null}
+
       <header className="hero">
         <p className="kicker">Stock Sage</p>
         <h1>Local Inventory Intelligence</h1>

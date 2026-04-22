@@ -425,7 +425,9 @@ describe("Dashboard rendering", () => {
     expect(JSON.parse(String(salePostCall?.[1]?.body))).toEqual(
       expect.objectContaining({ ordered_by_username: "Counter Staff" })
     );
-    expect(await screen.findByText("Sale recorded.")).toBeInTheDocument();
+    const saleToast = await screen.findByRole("status");
+    expect(saleToast).toHaveTextContent("Sale recorded.");
+    expect(saleToast).toHaveTextContent("Transaction history has been updated.");
     expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("240GB SSD")).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("Counter Staff")).toBeInTheDocument();
   });

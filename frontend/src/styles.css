@@ -252,6 +252,57 @@ body {
   font-weight: 700;
 }
 
+.toast-notification {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 55;
+  width: min(380px, calc(100vw - 2rem));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.72rem;
+  align-items: flex-start;
+  border: 1px solid #bce3d7;
+  border-left: 5px solid var(--accent);
+  border-radius: 10px;
+  background: #f4fffb;
+  padding: 0.82rem 0.88rem;
+  box-shadow: 0 18px 34px -22px rgba(19, 33, 53, 0.55);
+}
+
+.toast-notification-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.toast-notification-title {
+  margin: 0;
+  font-weight: 900;
+}
+
+.toast-notification-copy {
+  margin: 0.15rem 0 0;
+  color: var(--muted-ink);
+  font-size: 0.82rem;
+}
+
+.toast-notification-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted-ink);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 900;
+  padding: 0.08rem 0.12rem;
+}
+
 .kpi-grid {
   margin-top: 1rem;
   display: grid;
@@ -1622,6 +1673,13 @@ tbody tr:hover {
 @media (max-width: 768px) {
   .dashboard-shell {
     padding: 1.1rem 0.78rem 1.8rem;
+  }
+
+  .toast-notification {
+    top: 0.75rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    width: auto;
   }
 
   .toolbar {
