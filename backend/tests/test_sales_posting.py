@@ -98,6 +98,7 @@ def test_sales_posting_is_atomic_with_stock_movements() -> None:
     assert sales_rows[0]["qty"] == 4
     assert sales_rows[0]["unit_sell_price"] == "2.00"
     assert sales_rows[0]["line_total"] == "8.00"
+    assert sales_rows[0]["ordered_by_username"] == "super_admin"
 
     filtered_sales_resp = client.get("/sales?date_from=2026-02-02&date_to=2026-02-02")
     assert filtered_sales_resp.status_code == 200
@@ -198,6 +199,11 @@ def test_authenticated_sales_posting_does_not_conflict_with_auth_session_transac
     assert product_resp.status_code == 200
     assert sale_resp.status_code == 200
     assert sale_resp.json()["total_amount"] == "4.00"
+    assert sale_resp.json()["ordered_by_username"] == "admin"
+
+    sales_resp = client.get("/sales")
+    assert sales_resp.status_code == 200
+    assert sales_resp.json()["items"][0]["ordered_by_username"] == "admin"
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)

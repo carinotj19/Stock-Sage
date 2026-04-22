@@ -5,6 +5,8 @@ type RequestJson = <T>(path: string, init?: RequestInit) => Promise<T>;
 type SettingsTab = "system" | "accounts" | "audit" | "recycle";
 
 type SettingsPanelProps = {
+  currentRole: UserRole;
+  currentUsername: string;
   onProductsChanged?: () => Promise<void>;
   requestJson: RequestJson;
 };
@@ -28,7 +30,10 @@ const formatDate = (value: string | null) => {
   }).format(new Date(value));
 };
 
-export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelProps) => {
+const formatRole = (role: UserRole) => role.replace("_", " ");
+
+export const SettingsPanel = ({ currentRole, currentUsername, onProductsChanged, requestJson }: SettingsPanelProps) => {
+  const canManageAccounts = currentRole === "super_admin";
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>("system");
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(null);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
@@ -46,7 +51,7 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
     setSettingsError(null);
     const [systemResult, accountsResult, auditLogsResult, recycledProductsResult] = await Promise.allSettled([
       requestJson<SystemSettings>("/settings/system"),
-      requestJson<AccountRow[]>("/settings/accounts"),
+      canManageAccounts ? requestJson<AccountRow[]>("/settings/accounts") : Promise.resolve<AccountRow[]>([]),
       requestJson<AuditLogRow[]>("/settings/audit-logs"),
       requestJson<ProductRow[]>("/settings/recycle-bin/products")
     ]);
@@ -68,7 +73,13 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
   useEffect(() => {
     void loadSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canManageAccounts]);
+
+  useEffect(() => {
+    if (!canManageAccounts && activeSettingsTab === "accounts") {
+      setActiveSettingsTab("system");
+    }
+  }, [activeSettingsTab, canManageAccounts]);
 
   const onCreateAccount = async (event: FormEvent) => {
     event.preventDefault();
@@ -106,6 +117,22 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
     }
   };
 
+  const onChangeAccountRole = async (account: AccountRow, role: "admin" | "staff") => {
+    setSettingsMessage(null);
+    setSettingsError(null);
+    try {
+      await requestJson<AccountRow>(`/settings/accounts/${account.id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role })
+      });
+      setSettingsMessage(`${account.display_name} changed to ${role}.`);
+      await loadSettings();
+    } catch (error) {
+      setSettingsError(`Update role failed: ${String(error)}`);
+    }
+  };
+
   const onRestoreProduct = async (product: ProductRow) => {
     setSettingsMessage(null);
     setSettingsError(null);
@@ -127,7 +154,7 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
       <div className="settings-head">
         <div>
           <h2 id="settings-title">Settings</h2>
-          <p>Configure system settings and manage users</p>
+          <p>{canManageAccounts ? "Configure system settings and manage users" : "Configure system settings"}</p>
         </div>
         <button className="secondary-btn" onClick={() => void loadSettings()}>
           Refresh Settings
@@ -141,12 +168,14 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
         >
           System
         </button>
-        <button
-          className={activeSettingsTab === "accounts" ? "settings-tab active" : "settings-tab"}
-          onClick={() => setActiveSettingsTab("accounts")}
-        >
-          Accounts
-        </button>
+        {canManageAccounts ? (
+          <button
+            className={activeSettingsTab === "accounts" ? "settings-tab active" : "settings-tab"}
+            onClick={() => setActiveSettingsTab("accounts")}
+          >
+            Accounts
+          </button>
+        ) : null}
         <button
           className={activeSettingsTab === "audit" ? "settings-tab active" : "settings-tab"}
           onClick={() => setActiveSettingsTab("audit")}
@@ -176,18 +205,19 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
             <p className="kpi-label">Active Accounts</p>
             <p className="settings-stat-value">{systemSettings?.active_accounts ?? 0}</p>
             <p className="meta">
-              Admin {systemSettings?.admin_accounts ?? 0} / Staff {systemSettings?.staff_accounts ?? 0}
+              Super Admin {systemSettings?.super_admin_accounts ?? 0} / Admin {systemSettings?.admin_accounts ?? 0} / Staff{" "}
+              {systemSettings?.staff_accounts ?? 0}
             </p>
           </article>
           <article className="settings-stat">
             <p className="kpi-label">Session Policy</p>
             <p className="settings-stat-value">{Math.round((systemSettings?.session_ttl_seconds ?? 0) / 3600)}h</p>
-            <p className="meta">Staff can use inventory tools. Admin can manage settings.</p>
+            <p className="meta">Staff can use inventory tools. Admin can manage settings. Super admin can manage accounts.</p>
           </article>
         </section>
       ) : null}
 
-      {activeSettingsTab === "accounts" ? (
+      {activeSettingsTab === "accounts" && canManageAccounts ? (
         <section className="settings-layout">
           <section className="panel settings-form-panel">
             <h3>Create Account</h3>
@@ -272,7 +302,7 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
                         </td>
                         <td>{account.email ?? "--"}</td>
                         <td>
-                          <span className={`role-pill role-pill--${account.role}`}>{account.role}</span>
+                          <span className={`role-pill role-pill--${account.role}`}>{formatRole(account.role)}</span>
                         </td>
                         <td>
                           <span className={account.status === "active" ? "status-pill status-pill--healthy" : "status-pill"}>
@@ -280,10 +310,30 @@ export const SettingsPanel = ({ onProductsChanged, requestJson }: SettingsPanelP
                           </span>
                         </td>
                         <td>{formatDate(account.created_at)}</td>
-                        <td>
+                        <td className="account-actions">
+                          {account.role === "staff" ? (
+                            <button
+                              className="secondary-btn table-action-btn"
+                              disabled={account.status !== "active"}
+                              onClick={() => void onChangeAccountRole(account, "admin")}
+                              type="button"
+                            >
+                              Promote
+                            </button>
+                          ) : null}
+                          {account.role === "admin" ? (
+                            <button
+                              className="secondary-btn table-action-btn"
+                              disabled={account.status !== "active"}
+                              onClick={() => void onChangeAccountRole(account, "staff")}
+                              type="button"
+                            >
+                              Demote
+                            </button>
+                          ) : null}
                           <button
                             className="danger-link"
-                            disabled={account.status !== "active"}
+                            disabled={account.status !== "active" || account.username === currentUsername}
                             onClick={() => void onDeactivateAccount(account)}
                           >
                             Deactivate

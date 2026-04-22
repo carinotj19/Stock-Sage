@@ -31,6 +31,7 @@ class SaleRead(BaseModel):
     sold_at: datetime
     total_amount: Decimal
     payment_method: str | None
+    ordered_by_username: str | None = None
     items: list[SaleItemRead]
 
 
@@ -47,6 +48,7 @@ class SaleTransactionLineRead(BaseModel):
     line_total: Decimal
     total_amount: Decimal
     payment_method: str | None
+    ordered_by_username: str | None = None
 
 
 class SaleTransactionPageRead(BaseModel):

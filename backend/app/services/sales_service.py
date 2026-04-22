@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import InventoryBalance, Product, SalesItem, SalesTransaction, StockMovement
+from app.db.models import AdminUser, InventoryBalance, Product, SalesItem, SalesTransaction, StockMovement
 from app.schemas.sales import SaleCreate, SaleItemRead, SaleRead, SaleTransactionLineRead, SaleTransactionPageRead
 
 
@@ -74,6 +74,7 @@ class SalesService:
                 line_total=item.line_total,
                 total_amount=transaction.total_amount,
                 payment_method=transaction.payment_method,
+                ordered_by_username=transaction.ordered_by_username,
             )
             for transaction, item, product in self.db.execute(statement).all()
         ]
@@ -85,7 +86,7 @@ class SalesService:
             total_pages=total_pages,
         )
 
-    def create_sale(self, payload: SaleCreate) -> SaleRead:
+    def create_sale(self, payload: SaleCreate, actor: AdminUser | None = None) -> SaleRead:
         timestamp = payload.sold_at or datetime.now(timezone.utc)
         receipt_no = payload.receipt_no or f"R-{uuid4().hex[:12].upper()}"
 
@@ -95,6 +96,7 @@ class SalesService:
                 sold_at=timestamp,
                 total_amount=Decimal("0.00"),
                 payment_method=payload.payment_method,
+                ordered_by_username=actor.username if actor is not None else None,
             )
             self.db.add(transaction)
             self.db.flush()
@@ -155,6 +157,7 @@ class SalesService:
                 sold_at=transaction.sold_at,
                 total_amount=transaction.total_amount,
                 payment_method=transaction.payment_method,
+                ordered_by_username=transaction.ordered_by_username,
                 items=[
                     SaleItemRead(
                         id=item.id,

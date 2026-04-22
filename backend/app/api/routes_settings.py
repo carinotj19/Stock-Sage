@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AdminUser, AuditLog
 from app.db.session import get_db
-from app.schemas.auth import AccountCreateRequest, AccountRead, AuditLogRead, SystemSettingsRead
+from app.schemas.auth import AccountCreateRequest, AccountRead, AccountRoleUpdateRequest, AuditLogRead, SystemSettingsRead
 from app.schemas.inventory import ProductRead
 from app.services.auth_service import (
     get_session_ttl_seconds,
@@ -16,6 +16,7 @@ from app.services.auth_service import (
     normalize_username,
     record_audit_log,
     require_admin,
+    require_super_admin,
 )
 from app.services.inventory_service import InventoryService
 
@@ -60,6 +61,14 @@ def get_system_settings(
         )
         or 0
     )
+    super_admin_accounts = (
+        db.scalar(
+            select(func.count())
+            .select_from(AdminUser)
+            .where(AdminUser.active.is_(True), AdminUser.role == "super_admin")
+        )
+        or 0
+    )
     staff_accounts = (
         db.scalar(
             select(func.count()).select_from(AdminUser).where(AdminUser.active.is_(True), AdminUser.role == "staff")
@@ -70,6 +79,7 @@ def get_system_settings(
         auth_enabled=not is_auth_disabled(),
         configured=is_auth_configured(db),
         active_accounts=active_accounts,
+        super_admin_accounts=super_admin_accounts,
         admin_accounts=admin_accounts,
         staff_accounts=staff_accounts,
         session_ttl_seconds=get_session_ttl_seconds(),
@@ -78,7 +88,7 @@ def get_system_settings(
 
 @router.get("/accounts", response_model=list[AccountRead])
 def list_accounts(
-    _: AdminUser = Depends(require_admin),
+    _: AdminUser = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ) -> list[AccountRead]:
     accounts = db.scalars(select(AdminUser).order_by(AdminUser.created_at.desc(), AdminUser.username.asc())).all()
@@ -88,7 +98,7 @@ def list_accounts(
 @router.post("/accounts", response_model=AccountRead, status_code=status.HTTP_201_CREATED)
 def create_account(
     payload: AccountCreateRequest,
-    actor: AdminUser = Depends(require_admin),
+    actor: AdminUser = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ) -> AccountRead:
     username = normalize_username(payload.username)
@@ -128,10 +138,44 @@ def create_account(
     return _account_read(account)
 
 
+@router.patch("/accounts/{account_id}/role", response_model=AccountRead)
+def update_account_role(
+    account_id: int,
+    payload: AccountRoleUpdateRequest,
+    actor: AdminUser = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+) -> AccountRead:
+    account = db.get(AdminUser, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found.")
+    if account.role == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts cannot be promoted or demoted.",
+        )
+    if account.role == payload.role:
+        return _account_read(account)
+
+    previous_role = account.role
+    account.role = payload.role
+    db.add(account)
+    record_audit_log(
+        db,
+        actor=actor,
+        action="account.role_updated",
+        target_type="account",
+        target_id=account.id,
+        message=f"Changed account {account.username} from {previous_role} to {payload.role}.",
+    )
+    db.commit()
+    db.refresh(account)
+    return _account_read(account)
+
+
 @router.delete("/accounts/{account_id}", response_model=AccountRead)
 def deactivate_account(
     account_id: int,
-    actor: AdminUser = Depends(require_admin),
+    actor: AdminUser = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ) -> AccountRead:
     account = db.get(AdminUser, account_id)
@@ -140,15 +184,20 @@ def deactivate_account(
     if account.id == actor.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot deactivate your own account.")
 
-    if account.active and account.role == "admin":
-        active_admins = (
+    if account.active and account.role == "super_admin":
+        active_super_admins = (
             db.scalar(
-                select(func.count()).select_from(AdminUser).where(AdminUser.active.is_(True), AdminUser.role == "admin")
+                select(func.count())
+                .select_from(AdminUser)
+                .where(AdminUser.active.is_(True), AdminUser.role == "super_admin")
             )
             or 0
         )
-        if active_admins <= 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one admin account is required.")
+        if active_super_admins <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one super admin account is required.",
+            )
 
     account.active = False
     db.add(account)

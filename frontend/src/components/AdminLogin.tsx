@@ -1,14 +1,13 @@
 import { FormEvent, useState } from "react";
 
 type AdminLoginProps = {
-  apiBaseUrl: string;
   error: string | null;
   isChecking: boolean;
   isSubmitting: boolean;
   onSubmit: (username: string, password: string) => Promise<void>;
 };
 
-export const AdminLogin = ({ apiBaseUrl, error, isChecking, isSubmitting, onSubmit }: AdminLoginProps) => {
+export const AdminLogin = ({ error, isChecking, isSubmitting, onSubmit }: AdminLoginProps) => {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
 
@@ -56,7 +55,6 @@ export const AdminLogin = ({ apiBaseUrl, error, isChecking, isSubmitting, onSubm
             {error}
           </p>
         ) : null}
-        <p className="meta auth-api">API: {apiBaseUrl}</p>
       </section>
     </main>
   );

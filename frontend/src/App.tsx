@@ -9,6 +9,7 @@ import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
 import type {
   ItemForecastDetail,
+  ManualScrapeRunResult,
   ProductRow,
   LowStockRow,
   PriceComparisonRow,
@@ -26,6 +27,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 const ITEM_FORECAST_HISTORY_DAYS = 365;
 const TRANSACTION_PAGE_SIZE = 50;
+
+const isAdminRole = (role: UserRole | null) => role === "admin" || role === "super_admin";
 
 type AuthStatus = {
   authenticated: boolean;
@@ -62,7 +65,7 @@ const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => 
     response = await fetch(requestUrl, { ...init, credentials: "include" });
   } catch (error) {
     throw new Error(
-      `Cannot reach API at ${API_BASE_URL}. Check that the backend URL is live and CORS allows this frontend. Original error: ${String(error)}`
+      `Cannot reach the API. Check that the backend is live and CORS allows this frontend. Original error: ${String(error)}`
     );
   }
 
@@ -122,6 +125,7 @@ const App = () => {
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isScraping, setIsScraping] = useState<boolean>(false);
 
   const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
   const [stockoutRows, setStockoutRows] = useState<StockoutRow[]>([]);
@@ -248,7 +252,7 @@ const App = () => {
       }
     } catch (error) {
       setAuthState({ status: "anonymous" });
-      setLoginError(`Cannot check admin session at ${API_BASE_URL}: ${String(error)}`);
+      setLoginError(`Cannot check admin session: ${String(error)}`);
     }
   };
 
@@ -320,10 +324,10 @@ const App = () => {
   };
 
   const applyTransactionPage = (pageData: SaleTransactionPage) => {
-    setTransactionRows(pageData.items);
-    setTransactionPage(pageData.page);
-    setTransactionTotal(pageData.total);
-    setTransactionTotalPages(pageData.total_pages);
+    setTransactionRows(Array.isArray(pageData.items) ? pageData.items : []);
+    setTransactionPage(pageData.page ?? 1);
+    setTransactionTotal(pageData.total ?? 0);
+    setTransactionTotalPages(pageData.total_pages ?? 1);
   };
 
   const loadTransactionPage = async ({
@@ -342,7 +346,7 @@ const App = () => {
       setApiError(null);
       return true;
     } catch (error) {
-      setApiError(`Cannot load transactions from ${API_BASE_URL}: ${String(error)}`);
+      setApiError(`Cannot load transactions: ${String(error)}`);
       return false;
     } finally {
       setIsTransactionLoading(false);
@@ -379,7 +383,7 @@ const App = () => {
     const firstError = results.find((item) => item.status === "rejected");
     if (firstError && firstError.status === "rejected") {
       setApiError(
-        `Cannot load API data from ${API_BASE_URL}. Ensure backend is running and CORS allows this origin.`
+        "Cannot load latest data. Ensure backend is running and CORS allows this origin."
       );
     }
 
@@ -413,7 +417,7 @@ const App = () => {
 
     const refreshFailed = results.some((item) => item.status === "rejected");
     if (refreshFailed) {
-      setApiError(`Sale was saved, but latest transaction data could not be refreshed from ${API_BASE_URL}.`);
+      setApiError("Sale was saved, but latest transaction data could not be refreshed.");
     }
 
     setLastUpdatedAt(new Date());
@@ -433,7 +437,7 @@ const App = () => {
   }, [authState.status]);
 
   useEffect(() => {
-    if (authState.status === "authenticated" && authState.role !== "admin" && activeTab === "settings") {
+    if (authState.status === "authenticated" && !isAdminRole(authState.role) && activeTab === "settings") {
       setActiveTab("dashboard");
     }
   }, [activeTab, authState]);
@@ -599,6 +603,21 @@ const App = () => {
     setIsForecastModalLoading(false);
   };
 
+  const onRunManualScrape = async () => {
+    setActionMessage("Manual web scraping started.");
+    setApiError(null);
+    setIsScraping(true);
+    try {
+      const result = await requestJson<ManualScrapeRunResult>("/prices/scrape", { method: "POST" });
+      await loadData();
+      setActionMessage(`Manual web scraping completed. ${result.inserted_rows} competitor price snapshots saved.`);
+    } catch (error) {
+      setActionMessage(`Manual web scraping failed: ${String(error)}`);
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
   const onChangeTransactionDateFilter = (field: "from" | "to", value: string) => {
     const nextFilter = { ...transactionDateFilter, [field]: value };
     setTransactionPage(1);
@@ -624,7 +643,6 @@ const App = () => {
   if (authState.status !== "authenticated") {
     return (
       <AdminLogin
-        apiBaseUrl={API_BASE_URL}
         error={loginError}
         isChecking={authState.status === "checking"}
         isSubmitting={isLoggingIn}
@@ -659,7 +677,7 @@ const App = () => {
             >
               💳 Transactions
             </button>
-            {authState.role === "admin" ? (
+            {isAdminRole(authState.role) ? (
               <button
                 className={activeTab === "settings" ? "tab active" : "tab"}
                 onClick={() => setActiveTab("settings")}
@@ -671,16 +689,19 @@ const App = () => {
           <button className="refresh-btn" onClick={() => void loadData()}>
             Refresh Data
           </button>
+          <button className="secondary-btn" disabled={isScraping} onClick={() => void onRunManualScrape()}>
+            {isScraping ? "Scraping..." : "Run Web Scrape"}
+          </button>
           <button className="secondary-btn" onClick={() => void onLogout()}>
             Sign Out
           </button>
         </div>
         <div className="meta-row">
           <p className="meta account-meta">
+            <span>Logged in as:</span>
             <span>{authState.displayName}</span>
-            <span className={`role-pill role-pill--${authState.role}`}>{authState.role}</span>
+            <span className={`role-pill role-pill--${authState.role}`}>{authState.role.replace("_", " ")}</span>
           </p>
-          <p className="meta">API: {API_BASE_URL}</p>
           <p className="meta">{lastUpdatedLabel}</p>
         </div>
         {apiError ? <p className="status status-error">{apiError}</p> : null}
@@ -892,7 +913,7 @@ const App = () => {
           </section>
 
           <InventoryProductsTable
-            canDeleteProducts={authState.role === "admin"}
+            canDeleteProducts={isAdminRole(authState.role)}
             formatPHP={formatPHP}
             onDeleteProduct={onDeleteProduct}
             onSaveProduct={onSaveProduct}
@@ -1028,6 +1049,7 @@ const App = () => {
                       </button>
                     </th>
                     <th>Product</th>
+                    <th>Ordered By</th>
                     <th className="align-right">Quantity</th>
                     <th className="align-right">Unit Price</th>
                     <th className="align-right">Total</th>
@@ -1037,7 +1059,7 @@ const App = () => {
                 <tbody>
                   {transactionRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         {isTransactionLoading
                           ? "Loading transactions..."
                           : transactionTotal === 0 && (transactionDateFilter.from || transactionDateFilter.to)
@@ -1055,6 +1077,7 @@ const App = () => {
                             <span className="transaction-product-sku">{transaction.sku}</span>
                           </div>
                         </td>
+                        <td>{transaction.ordered_by_username?.trim() || "N/A"}</td>
                         <td className="align-right">{transaction.qty}</td>
                         <td className="align-right">{formatPHPWhole(transaction.unit_sell_price)}</td>
                         <td className="align-right transaction-total">{formatPHPWhole(transaction.line_total)}</td>
@@ -1119,8 +1142,13 @@ const App = () => {
         </section>
       ) : null}
 
-      {activeTab === "settings" && authState.role === "admin" ? (
-        <SettingsPanel requestJson={requestJson} onProductsChanged={loadData} />
+      {activeTab === "settings" && isAdminRole(authState.role) ? (
+        <SettingsPanel
+          currentRole={authState.role}
+          currentUsername={authState.username}
+          requestJson={requestJson}
+          onProductsChanged={loadData}
+        />
       ) : null}
 
       <ForecastItemModal
@@ -1152,6 +1180,10 @@ const App = () => {
               <article className="modal-metric">
                 <p className="kpi-label">Payment</p>
                 <p className="settings-stat-value">{selectedTransaction.payment_method ?? "-"}</p>
+              </article>
+              <article className="modal-metric">
+                <p className="kpi-label">Ordered By</p>
+                <p className="settings-stat-value">{selectedTransaction.ordered_by_username?.trim() || "N/A"}</p>
               </article>
               <article className="modal-metric">
                 <p className="kpi-label">Transaction Total</p>

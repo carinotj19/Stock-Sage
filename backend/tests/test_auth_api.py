@@ -21,7 +21,15 @@ def _build_test_session(engine):
     return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
-def _build_auth_client(monkeypatch, seed_admin: bool = True, active: bool = True):
+def _build_auth_client(
+    monkeypatch,
+    seed_admin: bool = True,
+    active: bool = True,
+    seed_username: str = "admin",
+    seed_display_name: str = "Admin User",
+    seed_email: str = "admin@example.com",
+    seed_role: str = "admin",
+):
     monkeypatch.setenv("STOCK_SAGE_AUTH_DISABLED", "0")
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-session-secret")
     clear_login_attempts("testclient")
@@ -35,10 +43,10 @@ def _build_auth_client(monkeypatch, seed_admin: bool = True, active: bool = True
         with TestingSessionLocal() as db:
             db.add(
                 AdminUser(
-                    username="admin",
-                    display_name="Admin User",
-                    email="admin@example.com",
-                    role="admin",
+                    username=seed_username,
+                    display_name=seed_display_name,
+                    email=seed_email,
+                    role=seed_role,
                     password_hash=hash_admin_password("correct-password"),
                     active=active,
                 )
@@ -56,6 +64,31 @@ def _build_auth_client(monkeypatch, seed_admin: bool = True, active: bool = True
 
     app.dependency_overrides[get_db] = override_get_db
     return TestClient(app), app, engine
+
+
+def _seed_account(
+    engine,
+    *,
+    username: str,
+    password: str,
+    role: str,
+    display_name: str,
+    email: str,
+    active: bool = True,
+) -> None:
+    TestingSessionLocal = _build_test_session(engine)
+    with TestingSessionLocal() as db:
+        db.add(
+            AdminUser(
+                username=username,
+                display_name=display_name,
+                email=email,
+                role=role,
+                password_hash=hash_admin_password(password),
+                active=active,
+            )
+        )
+        db.commit()
 
 
 def _cleanup_auth_client(app, engine) -> None:
@@ -158,7 +191,7 @@ def test_inactive_admin_cannot_login(monkeypatch) -> None:
         _cleanup_auth_client(app, engine)
 
 
-def test_admin_can_create_staff_account_and_read_audit_logs(monkeypatch) -> None:
+def test_admin_cannot_manage_accounts(monkeypatch) -> None:
     client, app, engine = _build_auth_client(monkeypatch)
     try:
         login_response = client.post(
@@ -175,26 +208,111 @@ def test_admin_can_create_staff_account_and_read_audit_logs(monkeypatch) -> None
                 "password": "staff-password",
             },
         )
+
+        assert login_response.status_code == 200
+        assert create_response.status_code == 403
+        assert create_response.json()["detail"] == "Super admin role required."
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
+def test_super_admin_can_create_admin_promote_demote_and_read_audit_logs(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(
+        monkeypatch,
+        seed_username="super_admin",
+        seed_display_name="Super Admin",
+        seed_email="super@example.com",
+        seed_role="super_admin",
+    )
+    try:
+        login_response = client.post(
+            "/auth/login",
+            json={"username": "super_admin", "password": "correct-password"},
+        )
+        create_admin_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "manager",
+                "display_name": "Manager Admin",
+                "email": "manager@example.com",
+                "role": "admin",
+                "password": "manager-password",
+            },
+        )
+        create_staff_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "staff",
+                "display_name": "Staff Member",
+                "email": "staff@example.com",
+                "role": "staff",
+                "password": "staff-password",
+            },
+        )
+        promote_response = client.patch(
+            f"/settings/accounts/{create_staff_response.json()['id']}/role",
+            json={"role": "admin"},
+        )
+        demote_response = client.patch(
+            f"/settings/accounts/{create_admin_response.json()['id']}/role",
+            json={"role": "staff"},
+        )
         accounts_response = client.get("/settings/accounts")
         logs_response = client.get("/settings/audit-logs")
 
         assert login_response.status_code == 200
-        assert create_response.status_code == 201
-        created_account = create_response.json()
-        assert created_account["username"] == "staff"
-        assert created_account["display_name"] == "Staff Member"
-        assert created_account["email"] == "staff@example.com"
-        assert created_account["role"] == "staff"
-        assert created_account["status"] == "active"
-        assert "password" not in created_account
+        assert create_admin_response.status_code == 201
+        created_admin = create_admin_response.json()
+        assert created_admin["username"] == "manager"
+        assert created_admin["display_name"] == "Manager Admin"
+        assert created_admin["email"] == "manager@example.com"
+        assert created_admin["role"] == "admin"
+        assert created_admin["status"] == "active"
+        assert "password" not in created_admin
+        assert create_staff_response.status_code == 201
+        assert promote_response.status_code == 200
+        assert promote_response.json()["role"] == "admin"
+        assert demote_response.status_code == 200
+        assert demote_response.json()["role"] == "staff"
 
         assert accounts_response.status_code == 200
         usernames = {account["username"] for account in accounts_response.json()}
-        assert {"admin", "staff"}.issubset(usernames)
+        assert {"super_admin", "manager", "staff"}.issubset(usernames)
 
         assert logs_response.status_code == 200
         audit_actions = [entry["action"] for entry in logs_response.json()]
         assert "account.created" in audit_actions
+        assert "account.role_updated" in audit_actions
+    finally:
+        _cleanup_auth_client(app, engine)
+
+
+def test_super_admin_can_deactivate_admin_account(monkeypatch) -> None:
+    client, app, engine = _build_auth_client(
+        monkeypatch,
+        seed_username="super_admin",
+        seed_display_name="Super Admin",
+        seed_email="super@example.com",
+        seed_role="super_admin",
+    )
+    try:
+        client.post("/auth/login", json={"username": "super_admin", "password": "correct-password"})
+        create_admin_response = client.post(
+            "/settings/accounts",
+            json={
+                "username": "manager",
+                "display_name": "Manager Admin",
+                "email": "manager@example.com",
+                "role": "admin",
+                "password": "manager-password",
+            },
+        )
+        deactivate_response = client.delete(f"/settings/accounts/{create_admin_response.json()['id']}")
+
+        assert create_admin_response.status_code == 201
+        assert deactivate_response.status_code == 200
+        assert deactivate_response.json()["username"] == "manager"
+        assert deactivate_response.json()["status"] == "inactive"
     finally:
         _cleanup_auth_client(app, engine)
 
@@ -267,15 +385,13 @@ def test_staff_cannot_soft_delete_product(monkeypatch) -> None:
                 "initial_stock": 2,
             },
         )
-        create_response = client.post(
-            "/settings/accounts",
-            json={
-                "username": "staff",
-                "display_name": "Staff Member",
-                "email": "staff@example.com",
-                "role": "staff",
-                "password": "staff-password",
-            },
+        _seed_account(
+            engine,
+            username="staff",
+            display_name="Staff Member",
+            email="staff@example.com",
+            role="staff",
+            password="staff-password",
         )
         client.post("/auth/logout")
         staff_login_response = client.post(
@@ -285,7 +401,6 @@ def test_staff_cannot_soft_delete_product(monkeypatch) -> None:
         delete_response = client.delete(f"/products/{product_response.json()['id']}")
 
         assert product_response.status_code == 200
-        assert create_response.status_code == 201
         assert staff_login_response.status_code == 200
         assert delete_response.status_code == 403
         assert delete_response.json()["detail"] == "Admin role required."
@@ -296,19 +411,14 @@ def test_staff_cannot_soft_delete_product(monkeypatch) -> None:
 def test_staff_can_use_dashboard_routes_but_cannot_manage_settings(monkeypatch) -> None:
     client, app, engine = _build_auth_client(monkeypatch)
     try:
-        client.post("/auth/login", json={"username": "admin", "password": "correct-password"})
-        create_response = client.post(
-            "/settings/accounts",
-            json={
-                "username": "staff",
-                "display_name": "Staff Member",
-                "email": "staff@example.com",
-                "role": "staff",
-                "password": "staff-password",
-            },
+        _seed_account(
+            engine,
+            username="staff",
+            display_name="Staff Member",
+            email="staff@example.com",
+            role="staff",
+            password="staff-password",
         )
-        assert create_response.status_code == 201
-        client.post("/auth/logout")
 
         staff_login_response = client.post(
             "/auth/login",
@@ -321,6 +431,6 @@ def test_staff_can_use_dashboard_routes_but_cannot_manage_settings(monkeypatch) 
         assert staff_login_response.json()["role"] == "staff"
         assert products_response.status_code == 200
         assert settings_response.status_code == 403
-        assert settings_response.json()["detail"] == "Admin role required."
+        assert settings_response.json()["detail"] == "Super admin role required."
     finally:
         _cleanup_auth_client(app, engine)

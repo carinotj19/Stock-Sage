@@ -106,10 +106,6 @@ body {
   margin-top: 0.85rem;
 }
 
-.auth-api {
-  overflow-wrap: anywhere;
-}
-
 .hero {
   padding: 0.45rem 0 1rem;
 }
@@ -486,9 +482,21 @@ tbody tr:hover {
   color: #2857a4;
 }
 
+.role-pill--super_admin {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+
 .role-pill--staff {
   background: #f0f1f4;
   color: #566070;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
 }
 
 .stock-row--out td {

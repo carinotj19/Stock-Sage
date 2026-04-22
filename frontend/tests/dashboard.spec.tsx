@@ -89,6 +89,48 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
+  it("runs manual web scraping from the dashboard toolbar", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (url.endsWith("/prices/scrape") && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            inserted_rows: 3,
+            ran_at: "2026-04-22T00:00:00Z",
+            message: "Manual web scraping completed with 3 snapshots saved."
+          })
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /run web scrape/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/prices/scrape"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    expect(await screen.findByText("Manual web scraping completed. 3 competitor price snapshots saved.")).toBeInTheDocument();
+  });
+
   it("does not render the developer forecast metrics report controls", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -188,7 +230,8 @@ describe("Dashboard rendering", () => {
         unit_sell_price: "2600.00",
         line_total: "2600.00",
         total_amount: "2600.00",
-        payment_method: "cash"
+        payment_method: "cash",
+        ordered_by_username: null
       },
       {
         transaction_id: 2,
@@ -202,7 +245,8 @@ describe("Dashboard rendering", () => {
         unit_sell_price: "1800.00",
         line_total: "1800.00",
         total_amount: "1800.00",
-        payment_method: "card"
+        payment_method: "card",
+        ordered_by_username: "admin"
       }
     ];
     const buildSalesPage = (url: string) => {
@@ -263,7 +307,8 @@ describe("Dashboard rendering", () => {
             unit_sell_price: product.sell_price,
             line_total: product.sell_price,
             total_amount: product.sell_price,
-            payment_method: payload.payment_method
+            payment_method: payload.payment_method,
+            ordered_by_username: "admin"
           }
         ];
         return {
@@ -308,7 +353,9 @@ describe("Dashboard rendering", () => {
     const historyTable = await screen.findByRole("table", { name: /transaction history/i });
     const initialRows = within(historyTable).getAllByRole("row").map((row) => row.textContent ?? "");
     expect(initialRows[1]).toContain("8GB DDR4 RAM");
+    expect(initialRows[1]).toContain("admin");
     expect(initialRows[2]).toContain("600W PSU");
+    expect(initialRows[2]).toContain("N/A");
 
     fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-02-02" } });
     await waitFor(() => {
@@ -641,27 +688,62 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByLabelText("History range")).not.toBeInTheDocument();
   });
 
-  it("shows admin settings with account creation and audit logs", async () => {
+  it("hides account management from regular admin settings", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
+              : url.includes("/settings/system")
+                ? { auth_enabled: true, configured: true, active_accounts: 1, super_admin_accounts: 0, admin_accounts: 1, staff_accounts: 0, session_ttl_seconds: 86400 }
+                : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /settings/i }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /system/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /accounts/i })).not.toBeInTheDocument();
+  });
+
+  it("shows super admin account management with role changes and audit logs", async () => {
     const accounts = [
       {
         id: 1,
-        username: "admin",
-        display_name: "Admin User",
-        email: "admin@example.com",
-        role: "admin",
+        username: "super_admin",
+        display_name: "Super Admin",
+        email: "super@example.com",
+        role: "super_admin",
         status: "active",
         created_at: "2026-01-15T00:00:00Z",
+        last_login_at: null
+      },
+      {
+        id: 2,
+        username: "staff",
+        display_name: "Staff Member",
+        email: "staff@example.com",
+        role: "staff",
+        status: "active",
+        created_at: "2026-01-16T00:00:00Z",
         last_login_at: null
       }
     ];
     const auditLogs = [
       {
         id: 1,
-        actor_username: "admin",
+        actor_username: "super_admin",
         action: "account.created",
         target_type: "account",
-        target_id: 2,
-        message: "Created staff account staff.",
+        target_id: 3,
+        message: "Created admin account manager.",
         created_at: "2026-01-15T00:00:00Z"
       }
     ];
@@ -672,14 +754,14 @@ describe("Dashboard rendering", () => {
       if (url.includes("/auth/me")) {
         return {
           ok: true,
-          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+          json: async () => ({ authenticated: true, configured: true, username: "super_admin", display_name: "Super Admin", role: "super_admin" })
         };
       }
 
       if (url.endsWith("/settings/accounts") && init?.method === "POST") {
         const payload = JSON.parse(String(init.body));
         accounts.push({
-          id: 2,
+          id: 3,
           username: payload.username,
           display_name: payload.display_name,
           email: payload.email,
@@ -688,6 +770,18 @@ describe("Dashboard rendering", () => {
           created_at: "2026-01-16T00:00:00Z",
           last_login_at: null
         });
+        return {
+          ok: true,
+          json: async () => accounts[2]
+        };
+      }
+
+      if (url.endsWith("/settings/accounts/2/role") && init?.method === "PATCH") {
+        const payload = JSON.parse(String(init.body));
+        accounts[1] = {
+          ...accounts[1],
+          role: payload.role
+        };
         return {
           ok: true,
           json: async () => accounts[1]
@@ -711,7 +805,15 @@ describe("Dashboard rendering", () => {
       if (url.includes("/settings/system")) {
         return {
           ok: true,
-          json: async () => ({ auth_enabled: true, active_accounts: 1, admin_accounts: 1, staff_accounts: 0 })
+          json: async () => ({
+            auth_enabled: true,
+            configured: true,
+            active_accounts: 2,
+            super_admin_accounts: 1,
+            admin_accounts: 0,
+            staff_accounts: 1,
+            session_ttl_seconds: 86400
+          })
         };
       }
 
@@ -732,11 +834,21 @@ describe("Dashboard rendering", () => {
     expect(screen.getByRole("button", { name: /audit logs/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /accounts/i }));
-    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "staff" } });
-    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Staff Member" } });
-    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "staff@example.com" } });
-    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "staff-password" } });
-    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "staff" } });
+    fireEvent.click(await screen.findByRole("button", { name: /promote/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/accounts/2/role"),
+        expect.objectContaining({ method: "PATCH" })
+      );
+    });
+    expect(await screen.findByText("Staff Member changed to admin.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "manager" } });
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Manager Admin" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "manager@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "manager-password" } });
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "admin" } });
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
@@ -745,10 +857,10 @@ describe("Dashboard rendering", () => {
         expect.objectContaining({ method: "POST" })
       );
     });
-    expect(await screen.findByText("Staff Member")).toBeInTheDocument();
+    expect(await screen.findByText("Manager Admin")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /audit logs/i }));
-    expect(await screen.findByText("Created staff account staff.")).toBeInTheDocument();
+    expect(await screen.findByText("Created admin account manager.")).toBeInTheDocument();
   });
 
   it("hides the settings tab for staff accounts", async () => {

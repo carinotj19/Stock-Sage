@@ -4,8 +4,10 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.db.models import AdminUser
 from app.db.session import get_db
 from app.schemas.sales import SaleCreate, SaleRead, SaleTransactionPageRead
+from app.services.auth_service import require_authenticated_user
 from app.services.sales_service import SalesService
 
 
@@ -26,6 +28,10 @@ def get_sales(
 
 
 @router.post("/sales", response_model=SaleRead)
-def post_sale(payload: SaleCreate, db: Session = Depends(get_db)) -> SaleRead:
+def post_sale(
+    payload: SaleCreate,
+    actor: AdminUser = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+) -> SaleRead:
     service = SalesService(db)
-    return service.create_sale(payload)
+    return service.create_sale(payload, actor=actor)

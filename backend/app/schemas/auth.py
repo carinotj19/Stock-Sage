@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-UserRole = Literal["admin", "staff"]
+UserRole = Literal["super_admin", "admin", "staff"]
 
 
 class AdminLoginRequest(BaseModel):
@@ -26,6 +26,10 @@ class AccountCreateRequest(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     role: UserRole
     password: str = Field(min_length=8, max_length=256)
+
+
+class AccountRoleUpdateRequest(BaseModel):
+    role: Literal["admin", "staff"]
 
 
 class AccountRead(BaseModel):
@@ -53,6 +57,7 @@ class SystemSettingsRead(BaseModel):
     auth_enabled: bool
     configured: bool
     active_accounts: int
+    super_admin_accounts: int = 0
     admin_accounts: int
     staff_accounts: int
     session_ttl_seconds: int

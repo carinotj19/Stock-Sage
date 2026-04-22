@@ -18,6 +18,7 @@ from app.db.session import get_db
 ADMIN_SESSION_COOKIE = "stock_sage_admin_session"
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 600_000
+ADMIN_ROLES = {"admin", "super_admin"}
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 
@@ -187,7 +188,14 @@ def get_session_admin(db: Session, token: str | None) -> AdminUser | None:
 
 def get_request_session_admin(request: Request, db: Session) -> AdminUser | None:
     if is_auth_disabled():
-        return AdminUser(id=0, username="admin", display_name="Admin", role="admin", password_hash="", active=True)
+        return AdminUser(
+            id=0,
+            username="super_admin",
+            display_name="Super Admin",
+            role="super_admin",
+            password_hash="",
+            active=True,
+        )
     if not is_auth_configured(db):
         return None
     return get_session_admin(db, request.cookies.get(ADMIN_SESSION_COOKIE))
@@ -195,7 +203,14 @@ def get_request_session_admin(request: Request, db: Session) -> AdminUser | None
 
 def require_authenticated_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
     if is_auth_disabled():
-        return AdminUser(id=0, username="admin", display_name="Admin", role="admin", password_hash="", active=True)
+        return AdminUser(
+            id=0,
+            username="super_admin",
+            display_name="Super Admin",
+            role="super_admin",
+            password_hash="",
+            active=True,
+        )
 
     if not is_auth_configured(db):
         raise HTTPException(
@@ -214,10 +229,20 @@ def require_authenticated_user(request: Request, db: Session = Depends(get_db)) 
 
 def require_admin(request: Request, db: Session = Depends(get_db)) -> AdminUser:
     account = require_authenticated_user(request, db)
-    if account.role != "admin":
+    if account.role not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin role required.",
+        )
+    return account
+
+
+def require_super_admin(request: Request, db: Session = Depends(get_db)) -> AdminUser:
+    account = require_authenticated_user(request, db)
+    if account.role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin role required.",
         )
     return account
 

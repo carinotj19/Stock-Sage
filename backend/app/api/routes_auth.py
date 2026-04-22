@@ -41,7 +41,13 @@ def _auth_status_for_account(account) -> AuthStatus:
 @router.get("/me", response_model=AuthStatus)
 def get_auth_status(request: Request, db: Session = Depends(get_db)) -> AuthStatus:
     if is_auth_disabled():
-        return AuthStatus(authenticated=True, configured=True, username="admin", display_name="Admin", role="admin")
+        return AuthStatus(
+            authenticated=True,
+            configured=True,
+            username="super_admin",
+            display_name="Super Admin",
+            role="super_admin",
+        )
 
     if not is_auth_configured(db):
         return AuthStatus(authenticated=False, configured=False)

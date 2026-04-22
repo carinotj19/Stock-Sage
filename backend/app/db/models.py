@@ -125,6 +125,7 @@ class SalesTransaction(Base):
     sold_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     payment_method: Mapped[Optional[str]] = mapped_column(String(50))
+    ordered_by_username: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     items: Mapped[list["SalesItem"]] = relationship(back_populates="transaction")

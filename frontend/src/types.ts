@@ -44,6 +44,7 @@ export type SaleTransactionRow = {
   line_total: string;
   total_amount: string;
   payment_method: string | null;
+  ordered_by_username?: string | null;
 };
 
 export type SaleTransactionPage = {
@@ -122,7 +123,7 @@ export type ItemForecastDetail = {
   price_analysis: ItemPriceAnalysis;
 };
 
-export type UserRole = "admin" | "staff";
+export type UserRole = "super_admin" | "admin" | "staff";
 
 export type AccountRow = {
   id: number;
@@ -139,9 +140,16 @@ export type SystemSettings = {
   auth_enabled: boolean;
   configured: boolean;
   active_accounts: number;
+  super_admin_accounts?: number;
   admin_accounts: number;
   staff_accounts: number;
   session_ttl_seconds: number;
+};
+
+export type ManualScrapeRunResult = {
+  inserted_rows: number;
+  ran_at: string;
+  message: string;
 };
 
 export type AuditLogRow = {

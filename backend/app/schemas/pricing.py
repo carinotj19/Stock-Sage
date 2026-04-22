@@ -23,3 +23,8 @@ class PriceComparisonRow(BaseModel):
     is_above_cheapest: bool
     competitor_prices: list[CompetitorPricePoint]
 
+
+class ManualScrapeRunResult(BaseModel):
+    inserted_rows: int
+    ran_at: datetime
+    message: str
