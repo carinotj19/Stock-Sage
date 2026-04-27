@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import { matchesSearchQuery } from "../search";
 import type { ProductRow } from "../types";
 
 export type InventoryProductUpdatePayload = {
@@ -17,6 +18,8 @@ type ProductEditForm = {
   safety_stock: string;
   on_hand_qty: string;
 };
+
+type ProductStockFilter = "all" | "in_stock" | "low_stock" | "out_of_stock";
 
 type InventoryProductsTableProps = {
   canDeleteProducts?: boolean;
@@ -45,6 +48,31 @@ export const InventoryProductsTable = ({
   const [editForm, setEditForm] = useState<ProductEditForm | null>(null);
   const [savingProductId, setSavingProductId] = useState<number | null>(null);
   const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [stockFilter, setStockFilter] = useState<ProductStockFilter>("all");
+  const categoryOptions = useMemo(
+    () =>
+      Array.from(new Set(products.map((product) => product.category).filter((category): category is string => Boolean(category))))
+        .sort((left, right) => left.localeCompare(right)),
+    [products]
+  );
+  const isFilterActive = searchQuery.trim() !== "" || categoryFilter !== "all" || stockFilter !== "all";
+  const filteredProducts = products.filter((product) =>
+    matchesSearchQuery(searchQuery, [
+      product.sku,
+      product.name,
+      product.category,
+      product.on_hand_qty,
+      product.sell_price,
+      product.safety_stock
+    ]) &&
+    (categoryFilter === "all" || product.category === categoryFilter) &&
+    (stockFilter === "all" ||
+      (stockFilter === "out_of_stock" && product.on_hand_qty <= 0) ||
+      (stockFilter === "low_stock" && product.on_hand_qty > 0 && product.on_hand_qty <= product.safety_stock) ||
+      (stockFilter === "in_stock" && product.on_hand_qty > product.safety_stock))
+  );
 
   const onStartEdit = (product: ProductRow) => {
     setEditingProductId(product.id);
@@ -107,15 +135,61 @@ export const InventoryProductsTable = ({
     }
   };
 
+  const onClearFilters = () => {
+    setSearchQuery("");
+    setCategoryFilter("all");
+    setStockFilter("all");
+  };
+
   return (
     <section className="panel panel-wide inventory-card inventory-card--products">
-      <h2>Products</h2>
+      <div className="panel-head panel-head--search">
+        <h2>Products</h2>
+        <label className="search-field">
+          <span className="sr-only">Search products</span>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search products"
+          />
+        </label>
+      </div>
+      <div className="table-filter-bar" aria-label="Product table filters">
+        <label className="table-filter-field">
+          Filter products by category
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+            <option value="all">All categories</option>
+            {categoryOptions.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="table-filter-field">
+          Filter products by stock status
+          <select
+            value={stockFilter}
+            onChange={(event) => setStockFilter(event.target.value as ProductStockFilter)}
+          >
+            <option value="all">All stock statuses</option>
+            <option value="in_stock">In stock</option>
+            <option value="low_stock">Low stock</option>
+            <option value="out_of_stock">Out of stock</option>
+          </select>
+        </label>
+        <button className="secondary-btn table-filter-clear" type="button" disabled={!isFilterActive} onClick={onClearFilters}>
+          Clear filters
+        </button>
+      </div>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
               <th>SKU</th>
               <th>Name</th>
+              <th>Category</th>
               <th>On Hand</th>
               <th>Sell Price</th>
               <th>Safety Stock</th>
@@ -123,12 +197,12 @@ export const InventoryProductsTable = ({
             </tr>
           </thead>
           <tbody>
-            {products.length === 0 ? (
+            {filteredProducts.length === 0 ? (
               <tr>
-                <td colSpan={6}>No products yet.</td>
+                <td colSpan={7}>{products.length === 0 ? "No products yet." : "No products match your filters."}</td>
               </tr>
             ) : (
-              products.map((product) => {
+              filteredProducts.map((product) => {
                 const isEditing = editingProductId === product.id && editForm !== null;
                 const isSaving = savingProductId === product.id;
                 const isDeleting = deletingProductId === product.id;
@@ -160,6 +234,7 @@ export const InventoryProductsTable = ({
                         product.name
                       )}
                     </td>
+                    <td>{product.category ?? "-"}</td>
                     <td>
                       {isEditing ? (
                         <input

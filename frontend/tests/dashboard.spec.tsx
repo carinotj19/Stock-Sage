@@ -89,6 +89,284 @@ describe("Dashboard rendering", () => {
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
+  it("filters stockout, inventory, adjustment, and transaction sections with search inputs", async () => {
+    const products = [
+      {
+        id: 1,
+        sku: "CPU-SEARCH-1",
+        name: "CPU Search Board",
+        category: "CPU",
+        supplier_id: null,
+        cost_price: "3000.00",
+        sell_price: "4200.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 4,
+        active: true,
+        on_hand_qty: 12,
+        created_at: "2026-04-09T00:00:00Z",
+        updated_at: "2026-04-09T00:00:00Z"
+      },
+      {
+        id: 2,
+        sku: "GPU-SEARCH-1",
+        name: "GPU Search Card",
+        category: "GPU",
+        supplier_id: null,
+        cost_price: "12000.00",
+        sell_price: "15000.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 2,
+        active: true,
+        on_hand_qty: 3,
+        created_at: "2026-04-09T00:00:00Z",
+        updated_at: "2026-04-09T00:00:00Z"
+      }
+    ];
+    const stockoutRows = [
+      {
+        product_id: 1,
+        sku: "CPU-SEARCH-1",
+        name: "CPU Search Board",
+        predicted_stockout_date: null,
+        suggested_qty: 0
+      },
+      {
+        product_id: 2,
+        sku: "GPU-SEARCH-1",
+        name: "GPU Search Card",
+        predicted_stockout_date: "2026-04-30",
+        suggested_qty: 6
+      }
+    ];
+    const transactionRows = [
+      {
+        transaction_id: 1,
+        item_id: 1,
+        receipt_no: "R-CPU-1",
+        sold_at: "2026-02-01T08:00:00Z",
+        product_id: 1,
+        sku: "CPU-SEARCH-1",
+        product_name: "CPU Search Board",
+        qty: 1,
+        unit_sell_price: "4200.00",
+        line_total: "4200.00",
+        total_amount: "4200.00",
+        payment_method: "cash",
+        ordered_by_username: "admin"
+      },
+      {
+        transaction_id: 2,
+        item_id: 2,
+        receipt_no: "R-GPU-1",
+        sold_at: "2026-02-02T09:00:00Z",
+        product_id: 2,
+        sku: "GPU-SEARCH-1",
+        product_name: "GPU Search Card",
+        qty: 1,
+        unit_sell_price: "15000.00",
+        line_total: "15000.00",
+        total_amount: "15000.00",
+        payment_method: "card",
+        ordered_by_username: "admin"
+      }
+    ];
+    const buildSalesPage = (url: string) => {
+      const parsedUrl = new URL(url);
+      const search = (parsedUrl.searchParams.get("search") ?? "").toLowerCase();
+      const rows = transactionRows.filter((transaction) =>
+        [
+          transaction.receipt_no,
+          transaction.sku,
+          transaction.product_name,
+          transaction.payment_method,
+          transaction.ordered_by_username
+        ].some((value) => value.toLowerCase().includes(search))
+      );
+
+      return {
+        items: rows,
+        total: rows.length,
+        page: 1,
+        page_size: 50,
+        total_pages: 1
+      };
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (pathname === "/dashboard/stockout-dates") {
+        return {
+          ok: true,
+          json: async () => stockoutRows
+        };
+      }
+
+      if (pathname === "/products") {
+        return {
+          ok: true,
+          json: async () => products
+        };
+      }
+
+      if (pathname === "/sales") {
+        return {
+          ok: true,
+          json: async () => buildSalesPage(url)
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText("Predicted Stockout Timeline")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search stockout timeline"), { target: { value: "GPU" } });
+    expect(screen.getByText("GPU Search Card")).toBeInTheDocument();
+    expect(screen.queryByText("CPU Search Board")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /inventory/i }));
+    const adjustPanel = (await screen.findByRole("heading", { name: "Adjust Stock" })).closest("section") as HTMLElement;
+    fireEvent.change(within(adjustPanel).getByLabelText("Search adjust stock products"), { target: { value: "CPU" } });
+    const adjustProductSelect = within(adjustPanel).getByLabelText("Product");
+    expect(within(adjustProductSelect).getByRole("option", { name: /CPU-SEARCH-1/ })).toBeInTheDocument();
+    expect(within(adjustProductSelect).queryByRole("option", { name: /GPU-SEARCH-1/ })).not.toBeInTheDocument();
+
+    const productsPanel = screen.getByRole("heading", { name: "Products" }).closest("section") as HTMLElement;
+    fireEvent.change(within(productsPanel).getByLabelText("Search products"), { target: { value: "GPU" } });
+    expect(within(productsPanel).getByText("GPU Search Card")).toBeInTheDocument();
+    expect(within(productsPanel).queryByText("CPU Search Board")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /transactions/i }));
+    const snapshotPanel = (await screen.findByRole("heading", { name: "Current Inventory Snapshot" })).closest(
+      "section"
+    ) as HTMLElement;
+    fireEvent.change(within(snapshotPanel).getByLabelText("Search current inventory snapshot"), {
+      target: { value: "GPU" }
+    });
+    expect(within(snapshotPanel).getByText("GPU Search Card")).toBeInTheDocument();
+    expect(within(snapshotPanel).queryByText("CPU Search Board")).not.toBeInTheDocument();
+
+    const historyPanel = screen.getByRole("heading", { name: "Transaction History" }).closest("section") as HTMLElement;
+    fireEvent.change(within(historyPanel).getByLabelText("Search transaction history"), { target: { value: "GPU" } });
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("search=GPU"))).toBe(true);
+    });
+    expect(within(historyPanel).getByText("GPU Search Card")).toBeInTheDocument();
+    expect(within(historyPanel).queryByText("CPU Search Board")).not.toBeInTheDocument();
+  });
+
+  it("filters the products table by category and stock status", async () => {
+    const products = [
+      {
+        id: 1,
+        sku: "CPU-FILTER-1",
+        name: "Filterable CPU",
+        category: "CPU",
+        supplier_id: null,
+        cost_price: "3000.00",
+        sell_price: "4200.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 4,
+        active: true,
+        on_hand_qty: 12,
+        created_at: "2026-04-09T00:00:00Z",
+        updated_at: "2026-04-09T00:00:00Z"
+      },
+      {
+        id: 2,
+        sku: "GPU-FILTER-1",
+        name: "Filterable GPU",
+        category: "GPU",
+        supplier_id: null,
+        cost_price: "12000.00",
+        sell_price: "15000.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 2,
+        active: true,
+        on_hand_qty: 0,
+        created_at: "2026-04-09T00:00:00Z",
+        updated_at: "2026-04-09T00:00:00Z"
+      },
+      {
+        id: 3,
+        sku: "SSD-FILTER-1",
+        name: "Filterable SSD",
+        category: "SSD",
+        supplier_id: null,
+        cost_price: "1200.00",
+        sell_price: "1800.00",
+        reorder_min_qty: 1,
+        reorder_multiple: 1,
+        safety_stock: 5,
+        active: true,
+        on_hand_qty: 3,
+        created_at: "2026-04-09T00:00:00Z",
+        updated_at: "2026-04-09T00:00:00Z"
+      }
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return {
+          ok: true,
+          json: async () =>
+            url.includes("/auth/me")
+              ? { authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" }
+              : url.includes("/products")
+                ? products
+                : []
+        };
+      })
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    const productsPanel = (await screen.findByRole("heading", { name: "Products" })).closest("section") as HTMLElement;
+    expect(await within(productsPanel).findByText("Filterable CPU")).toBeInTheDocument();
+
+    fireEvent.change(within(productsPanel).getByLabelText("Filter products by category"), {
+      target: { value: "GPU" }
+    });
+    expect(within(productsPanel).getByText("Filterable GPU")).toBeInTheDocument();
+    expect(within(productsPanel).queryByText("Filterable CPU")).not.toBeInTheDocument();
+    expect(within(productsPanel).queryByText("Filterable SSD")).not.toBeInTheDocument();
+
+    fireEvent.click(within(productsPanel).getByRole("button", { name: /clear filters/i }));
+    fireEvent.change(within(productsPanel).getByLabelText("Filter products by stock status"), {
+      target: { value: "low_stock" }
+    });
+    expect(within(productsPanel).getByText("Filterable SSD")).toBeInTheDocument();
+    expect(within(productsPanel).queryByText("Filterable CPU")).not.toBeInTheDocument();
+    expect(within(productsPanel).queryByText("Filterable GPU")).not.toBeInTheDocument();
+
+    fireEvent.change(within(productsPanel).getByLabelText("Filter products by stock status"), {
+      target: { value: "out_of_stock" }
+    });
+    expect(within(productsPanel).getByText("Filterable GPU")).toBeInTheDocument();
+    expect(within(productsPanel).queryByText("Filterable SSD")).not.toBeInTheDocument();
+  });
+
   it("runs manual web scraping from the dashboard toolbar", async () => {
     let scrapePolls = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -205,6 +483,151 @@ describe("Dashboard rendering", () => {
     expect(options).toEqual(
       expect.arrayContaining(["Select category", "Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"])
     );
+  });
+
+  it("shows a toast notification after creating a product", async () => {
+    const createdProduct = {
+      id: 1,
+      sku: "CPU-NEW-1",
+      name: "New Toast CPU",
+      category: "CPU",
+      supplier_id: null,
+      cost_price: "3000.00",
+      sell_price: "4500.00",
+      reorder_min_qty: 1,
+      reorder_multiple: 1,
+      safety_stock: 5,
+      active: true,
+      on_hand_qty: 10,
+      created_at: "2026-04-09T00:00:00Z",
+      updated_at: "2026-04-09T00:00:00Z"
+    };
+    let products: (typeof createdProduct)[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (pathname === "/products" && init?.method === "POST") {
+        products = [createdProduct];
+        return {
+          ok: true,
+          json: async () => createdProduct
+        };
+      }
+
+      if (pathname === "/products") {
+        return {
+          ok: true,
+          json: async () => products
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    const addProductPanel = (await screen.findByRole("heading", { name: "Add Product" })).closest("section") as HTMLElement;
+    fireEvent.change(within(addProductPanel).getByLabelText("SKU"), { target: { value: createdProduct.sku } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Name"), { target: { value: createdProduct.name } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Category"), { target: { value: "CPU" } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Cost Price"), { target: { value: "3000.00" } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Sell Price"), { target: { value: "4500.00" } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Initial Stock"), { target: { value: "10" } });
+    fireEvent.change(within(addProductPanel).getByLabelText("Safety Stock"), { target: { value: "5" } });
+    fireEvent.click(within(addProductPanel).getByRole("button", { name: /create product/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/products"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    const productToast = await screen.findByRole("status");
+    expect(productToast).toHaveTextContent("Product created.");
+    expect(productToast).toHaveTextContent("Inventory product list has been updated.");
+    expect(await screen.findByText("New Toast CPU")).toBeInTheDocument();
+  });
+
+  it("shows a toast notification after adjusting stock", async () => {
+    const product = {
+      id: 1,
+      sku: "CPU-ADJUST-1",
+      name: "Adjustable CPU",
+      category: "CPU",
+      supplier_id: null,
+      cost_price: "3000.00",
+      sell_price: "4500.00",
+      reorder_min_qty: 1,
+      reorder_multiple: 1,
+      safety_stock: 5,
+      active: true,
+      on_hand_qty: 10,
+      created_at: "2026-04-09T00:00:00Z",
+      updated_at: "2026-04-09T00:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({ authenticated: true, configured: true, username: "admin", display_name: "Admin User", role: "admin" })
+        };
+      }
+
+      if (pathname === "/inventory/adjust" && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({ ok: true })
+        };
+      }
+
+      if (pathname === "/products") {
+        return {
+          ok: true,
+          json: async () => [product]
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => []
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /inventory/i }));
+    const adjustPanel = (await screen.findByRole("heading", { name: "Adjust Stock" })).closest("section") as HTMLElement;
+    fireEvent.change(within(adjustPanel).getByLabelText("Stock Change"), { target: { value: "5" } });
+    fireEvent.click(within(adjustPanel).getByRole("button", { name: /apply adjustment/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/inventory/adjust"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    const stockToast = await screen.findByRole("status");
+    expect(stockToast).toHaveTextContent("Stock adjusted.");
+    expect(stockToast).toHaveTextContent("Inventory quantities have been updated.");
   });
 
   it("shows sales in transaction history, filters by date, and refreshes after recording a sale", async () => {
@@ -333,24 +756,41 @@ describe("Dashboard rendering", () => {
 
       if (pathname === "/sales" && init?.method === "POST") {
         const payload = JSON.parse(String(init.body));
-        const product = products.find((item) => item.id === payload.items[0].product_id) ?? products[0];
+        type PostedSaleItem = {
+          product: (typeof products)[number];
+          saleItem: { product_id: number; qty: number };
+          itemId: number;
+          lineTotal: string;
+        };
+        const postedItems: PostedSaleItem[] = payload.items.map((saleItem: { product_id: number; qty: number }, index: number) => {
+          const product = products.find((item) => item.id === saleItem.product_id) ?? products[0];
+          return {
+            product,
+            saleItem,
+            itemId: 3 + index,
+            lineTotal: (Number(product.sell_price) * saleItem.qty).toFixed(2)
+          };
+        });
+        const totalAmount = postedItems
+          .reduce((total: number, item: { lineTotal: string }) => total + Number(item.lineTotal), 0)
+          .toFixed(2);
         transactionRows = [
           ...transactionRows,
-          {
+          ...postedItems.map(({ product, saleItem, itemId, lineTotal }) => ({
             transaction_id: 3,
-            item_id: 3,
+            item_id: itemId,
             receipt_no: "R-003",
             sold_at: "2026-02-03T10:00:00Z",
             product_id: product.id,
             sku: product.sku,
             product_name: product.name,
-            qty: payload.items[0].qty,
+            qty: saleItem.qty,
             unit_sell_price: product.sell_price,
-            line_total: product.sell_price,
-            total_amount: product.sell_price,
+            line_total: lineTotal,
+            total_amount: totalAmount,
             payment_method: payload.payment_method,
             ordered_by_username: payload.ordered_by_username
-          }
+          }))
         ];
         return {
           ok: true,
@@ -358,7 +798,7 @@ describe("Dashboard rendering", () => {
             id: 3,
             receipt_no: "R-003",
             sold_at: "2026-02-03T10:00:00Z",
-            total_amount: product.sell_price,
+            total_amount: totalAmount,
             payment_method: payload.payment_method,
             ordered_by_username: payload.ordered_by_username,
             items: []
@@ -409,9 +849,13 @@ describe("Dashboard rendering", () => {
     expect(await screen.findByRole("heading", { name: "R-002" })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Close receipt details"));
 
-    fireEvent.change(screen.getByLabelText("Product"), { target: { value: "3" } });
-    fireEvent.change(screen.getByLabelText("Ordered By"), { target: { value: "Counter Staff" } });
-    fireEvent.click(screen.getByRole("button", { name: /save sale/i }));
+    const recordSalePanel = screen.getByRole("heading", { name: "Record Sale" }).closest("section") as HTMLElement;
+    fireEvent.change(within(recordSalePanel).getByLabelText("Product"), { target: { value: "3" } });
+    fireEvent.click(within(recordSalePanel).getByRole("button", { name: /add product/i }));
+    fireEvent.change(within(recordSalePanel).getByLabelText("Product 2"), { target: { value: "2" } });
+    fireEvent.change(within(recordSalePanel).getByLabelText("Quantity 2"), { target: { value: "2" } });
+    fireEvent.change(within(recordSalePanel).getByLabelText("Ordered By"), { target: { value: "Counter Staff" } });
+    fireEvent.click(within(recordSalePanel).getByRole("button", { name: /save sale/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -423,13 +867,20 @@ describe("Dashboard rendering", () => {
       ([input, init]) => String(input).includes("/sales") && init?.method === "POST"
     );
     expect(JSON.parse(String(salePostCall?.[1]?.body))).toEqual(
-      expect.objectContaining({ ordered_by_username: "Counter Staff" })
+      expect.objectContaining({
+        ordered_by_username: "Counter Staff",
+        items: [
+          { product_id: 3, qty: 1 },
+          { product_id: 2, qty: 2 }
+        ]
+      })
     );
     const saleToast = await screen.findByRole("status");
     expect(saleToast).toHaveTextContent("Sale recorded.");
     expect(saleToast).toHaveTextContent("Transaction history has been updated.");
     expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("240GB SSD")).toBeInTheDocument();
-    expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("Counter Staff")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: /transaction history/i })).getByText("600W PSU")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: /transaction history/i })).getAllByText("Counter Staff")).toHaveLength(2);
   });
 
   it("allows editing a product from the inventory table", async () => {

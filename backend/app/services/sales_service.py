@@ -4,7 +4,7 @@ from math import ceil
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import AdminUser, InventoryBalance, Product, SalesItem, SalesTransaction, StockMovement
@@ -23,6 +23,7 @@ class SalesService:
         sort: str = "desc",
         page: int = 1,
         page_size: int = 50,
+        search: str | None = None,
     ) -> SaleTransactionPageRead:
         filters = []
         if date_from is not None:
@@ -31,6 +32,17 @@ class SalesService:
             filters.append(
                 SalesTransaction.sold_at
                 < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            )
+        if search is not None and search.strip():
+            search_pattern = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    Product.sku.ilike(search_pattern),
+                    Product.name.ilike(search_pattern),
+                    SalesTransaction.receipt_no.ilike(search_pattern),
+                    SalesTransaction.ordered_by_username.ilike(search_pattern),
+                    SalesTransaction.payment_method.ilike(search_pattern),
+                )
             )
 
         count_statement = (

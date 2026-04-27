@@ -7,6 +7,7 @@ import { PriceComparisonTable } from "./components/PriceComparisonTable";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
+import { matchesSearchQuery } from "./search";
 import type {
   ItemForecastDetail,
   ManualScrapeJobStatus,
@@ -44,6 +45,21 @@ type AuthState =
   | { status: "checking" }
   | { status: "authenticated"; username: string; displayName: string; role: UserRole }
   | { status: "anonymous" };
+
+type SaleFormItem = {
+  product_id: string;
+  qty: string;
+};
+
+type ToastNotification = {
+  title: string;
+  copy: string;
+};
+
+const buildSaleFormItem = (productId = ""): SaleFormItem => ({
+  product_id: productId,
+  qty: "1"
+});
 
 const readApiError = async (response: Response) => {
   const body = await response.text();
@@ -131,7 +147,7 @@ const App = () => {
   const [scrapeJob, setScrapeJob] = useState<ManualScrapeJobStatus | null>(null);
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(null);
   const [isScrapeConsoleOpen, setIsScrapeConsoleOpen] = useState<boolean>(false);
-  const [saleNotification, setSaleNotification] = useState<string | null>(null);
+  const [toastNotification, setToastNotification] = useState<ToastNotification | null>(null);
 
   const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
   const [stockoutRows, setStockoutRows] = useState<StockoutRow[]>([]);
@@ -154,6 +170,9 @@ const App = () => {
   const [transactionTotal, setTransactionTotal] = useState(0);
   const [transactionTotalPages, setTransactionTotalPages] = useState(1);
   const [isTransactionLoading, setIsTransactionLoading] = useState(false);
+  const [adjustStockProductSearch, setAdjustStockProductSearch] = useState("");
+  const [inventorySnapshotSearch, setInventorySnapshotSearch] = useState("");
+  const [transactionSearch, setTransactionSearch] = useState("");
 
   const [newProduct, setNewProduct] = useState({
     sku: "",
@@ -172,11 +191,10 @@ const App = () => {
     reason: "manual_adjustment"
   });
   const [newSale, setNewSale] = useState({
-    product_id: "",
-    qty: "1",
     ordered_by_username: "",
     payment_method: "cash"
   });
+  const [newSaleItems, setNewSaleItems] = useState<SaleFormItem[]>([buildSaleFormItem()]);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
@@ -199,6 +217,25 @@ const App = () => {
   const normalizedTransactionPage = Math.min(transactionPage, transactionPageCount);
   const transactionRangeStart = transactionTotal === 0 ? 0 : (normalizedTransactionPage - 1) * TRANSACTION_PAGE_SIZE + 1;
   const transactionRangeEnd = Math.min(normalizedTransactionPage * TRANSACTION_PAGE_SIZE, transactionTotal);
+  const matchingAdjustStockProducts = products.filter((product) =>
+    matchesSearchQuery(adjustStockProductSearch, [product.sku, product.name, product.category])
+  );
+  const selectedAdjustStockProduct = products.find((product) => String(product.id) === adjustStock.product_id) ?? null;
+  const adjustStockProductOptions =
+    selectedAdjustStockProduct &&
+    !matchingAdjustStockProducts.some((product) => product.id === selectedAdjustStockProduct.id)
+      ? [selectedAdjustStockProduct, ...matchingAdjustStockProducts]
+      : matchingAdjustStockProducts;
+  const inventorySnapshotProducts = products.filter((product) =>
+    matchesSearchQuery(inventorySnapshotSearch, [
+      product.sku,
+      product.name,
+      product.category,
+      product.on_hand_qty,
+      product.sell_price
+    ])
+  );
+  const hasTransactionSearch = transactionSearch.trim().length > 0;
   const upcomingStockoutsCount = stockoutRows.filter((row) => {
     if (!row.predicted_stockout_date) return false;
     const daysLeft = Math.ceil((toDateOnlyTimestamp(row.predicted_stockout_date) - toDateOnlyTimestamp(todayString)) / 86400000);
@@ -306,19 +343,26 @@ const App = () => {
     if (!adjustStock.product_id && loadedProducts.length > 0) {
       setAdjustStock((prev) => ({ ...prev, product_id: String(loadedProducts[0].id) }));
     }
-    if (!newSale.product_id && loadedProducts.length > 0) {
-      setNewSale((prev) => ({ ...prev, product_id: String(loadedProducts[0].id) }));
+    if (loadedProducts.length > 0) {
+      const firstProductId = String(loadedProducts[0].id);
+      setNewSaleItems((prev) =>
+        prev.length === 0
+          ? [buildSaleFormItem(firstProductId)]
+          : prev.map((item, index) => (index === 0 && !item.product_id ? { ...item, product_id: firstProductId } : item))
+      );
     }
   };
 
   const buildSalesPath = ({
     page = transactionPage,
     dateFilter = transactionDateFilter,
-    sort = transactionDateSort
+    sort = transactionDateSort,
+    search = transactionSearch
   }: {
     page?: number;
     dateFilter?: typeof transactionDateFilter;
     sort?: typeof transactionDateSort;
+    search?: string;
   } = {}) => {
     const params = new URLSearchParams({
       page: String(page),
@@ -327,6 +371,7 @@ const App = () => {
     });
     if (dateFilter.from) params.set("date_from", dateFilter.from);
     if (dateFilter.to) params.set("date_to", dateFilter.to);
+    if (search.trim()) params.set("search", search.trim());
     return `/sales?${params.toString()}`;
   };
 
@@ -340,15 +385,17 @@ const App = () => {
   const loadTransactionPage = async ({
     page = transactionPage,
     dateFilter = transactionDateFilter,
-    sort = transactionDateSort
+    sort = transactionDateSort,
+    search = transactionSearch
   }: {
     page?: number;
     dateFilter?: typeof transactionDateFilter;
     sort?: typeof transactionDateSort;
+    search?: string;
   } = {}) => {
     setIsTransactionLoading(true);
     try {
-      const pageData = await requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort }));
+      const pageData = await requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort, search }));
       applyTransactionPage(pageData);
       setApiError(null);
       return true;
@@ -401,11 +448,13 @@ const App = () => {
   const loadTransactionTabData = async ({
     page = transactionPage,
     dateFilter = transactionDateFilter,
-    sort = transactionDateSort
+    sort = transactionDateSort,
+    search = transactionSearch
   }: {
     page?: number;
     dateFilter?: typeof transactionDateFilter;
     sort?: typeof transactionDateSort;
+    search?: string;
   } = {}) => {
     setIsLoading(true);
     setApiError(null);
@@ -413,7 +462,7 @@ const App = () => {
     const results = await Promise.allSettled([
       requestJson<ProductRow[]>("/products"),
       requestJson<SalesTrendPoint[]>("/dashboard/sales-trend?days=30"),
-      requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort }))
+      requestJson<SaleTransactionPage>(buildSalesPath({ page, dateFilter, sort, search }))
     ]);
 
     const [productResult, salesResult, transactionResult] = results;
@@ -454,6 +503,19 @@ const App = () => {
     setNewSale((prev) => ({ ...prev, ordered_by_username: authState.displayName }));
   }, [authState, newSale.ordered_by_username]);
 
+  const onChangeSaleItem = (index: number, field: keyof SaleFormItem, value: string) => {
+    setNewSaleItems((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)));
+  };
+
+  const onAddSaleItem = () => {
+    const firstProductId = products.length > 0 ? String(products[0].id) : "";
+    setNewSaleItems((prev) => [...prev, buildSaleFormItem(firstProductId)]);
+  };
+
+  const onRemoveSaleItem = (index: number) => {
+    setNewSaleItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, itemIndex) => itemIndex !== index)));
+  };
+
   useEffect(() => {
     if (!scrapeJobId || !isScrapeJobRunning(scrapeJob)) return;
 
@@ -493,10 +555,10 @@ const App = () => {
   }, [scrapeJobId, scrapeJob?.status]);
 
   useEffect(() => {
-    if (!saleNotification) return;
-    const timeoutId = window.setTimeout(() => setSaleNotification(null), 4200);
+    if (!toastNotification) return;
+    const timeoutId = window.setTimeout(() => setToastNotification(null), 4200);
     return () => window.clearTimeout(timeoutId);
-  }, [saleNotification]);
+  }, [toastNotification]);
 
   useEffect(() => {
     if (selectedForecastProductId === null) return;
@@ -551,7 +613,6 @@ const App = () => {
           safety_stock: Number(newProduct.safety_stock)
         })
       });
-      setActionMessage("Product created.");
       setNewProduct({
         sku: "",
         name: "",
@@ -564,6 +625,11 @@ const App = () => {
         safety_stock: "0"
       });
       await loadData();
+      setActionMessage("Product created.");
+      setToastNotification({
+        title: "Product created.",
+        copy: "Inventory product list has been updated."
+      });
     } catch (error) {
       setActionMessage(`Create product failed: ${String(error)}`);
     }
@@ -585,6 +651,10 @@ const App = () => {
       setActionMessage("Stock adjusted.");
       setAdjustStock((prev) => ({ ...prev, qty_delta: "" }));
       await loadData();
+      setToastNotification({
+        title: "Stock adjusted.",
+        copy: "Inventory quantities have been updated."
+      });
     } catch (error) {
       setActionMessage(`Adjust stock failed: ${String(error)}`);
     }
@@ -623,6 +693,18 @@ const App = () => {
   const onRecordSale = async (event: FormEvent) => {
     event.preventDefault();
     setActionMessage(null);
+    const saleItems = newSaleItems.map((item) => ({
+      product_id: Number(item.product_id),
+      qty: Number(item.qty)
+    }));
+    const hasInvalidItem = saleItems.some(
+      (item) => !Number.isInteger(item.product_id) || item.product_id <= 0 || !Number.isInteger(item.qty) || item.qty < 1
+    );
+    if (saleItems.length === 0 || hasInvalidItem) {
+      setActionMessage("Record sale failed: choose a product and quantity for every line item.");
+      return;
+    }
+
     try {
       await requestJson("/sales", {
         method: "POST",
@@ -630,23 +712,24 @@ const App = () => {
         body: JSON.stringify({
           payment_method: newSale.payment_method,
           ordered_by_username: newSale.ordered_by_username.trim(),
-          items: [
-            {
-              product_id: Number(newSale.product_id),
-              qty: Number(newSale.qty)
-            }
-          ]
+          items: saleItems
         })
       });
-      setNewSale((prev) => ({ ...prev, qty: "1" }));
+      setNewSaleItems([buildSaleFormItem(products.length > 0 ? String(products[0].id) : "")]);
       setTransactionDateSort("desc");
       const refreshed = await loadTransactionTabData({ page: 1, sort: "desc" });
       if (refreshed) {
         setActionMessage("Sale recorded.");
-        setSaleNotification("Sale recorded.");
+        setToastNotification({
+          title: "Sale recorded.",
+          copy: "Transaction history has been updated."
+        });
       } else {
         setActionMessage("Sale recorded, but the transaction table did not fully refresh.");
-        setSaleNotification("Sale recorded. Transaction refresh needs attention.");
+        setToastNotification({
+          title: "Sale recorded. Transaction refresh needs attention.",
+          copy: "Transaction history could not be fully refreshed."
+        });
       }
     } catch (error) {
       setActionMessage(`Record sale failed: ${String(error)}`);
@@ -736,6 +819,12 @@ const App = () => {
     void loadTransactionPage({ page: 1, dateFilter: nextFilter });
   };
 
+  const onChangeTransactionSearch = (value: string) => {
+    setTransactionSearch(value);
+    setTransactionPage(1);
+    void loadTransactionPage({ page: 1, search: value });
+  };
+
   const onToggleTransactionDateSort = () => {
     const nextSort = transactionDateSort === "desc" ? "asc" : "desc";
     setTransactionPage(1);
@@ -764,20 +853,20 @@ const App = () => {
 
   return (
     <main className="dashboard-shell">
-      {saleNotification ? (
+      {toastNotification ? (
         <div className="toast-notification toast-notification--success" role="status" aria-live="polite">
           <div className="toast-notification-icon" aria-hidden="true">
             ✓
           </div>
           <div>
-            <p className="toast-notification-title">{saleNotification}</p>
-            <p className="toast-notification-copy">Transaction history has been updated.</p>
+            <p className="toast-notification-title">{toastNotification.title}</p>
+            <p className="toast-notification-copy">{toastNotification.copy}</p>
           </div>
           <button
             className="toast-notification-close"
             type="button"
-            onClick={() => setSaleNotification(null)}
-            aria-label="Dismiss sale notification"
+            onClick={() => setToastNotification(null)}
+            aria-label="Dismiss notification"
           >
             x
           </button>
@@ -1003,7 +1092,18 @@ const App = () => {
           </section>
 
           <section className="panel inventory-card inventory-card--adjust">
-            <h2>Adjust Stock</h2>
+            <div className="panel-head panel-head--search">
+              <h2>Adjust Stock</h2>
+              <label className="search-field">
+                <span className="sr-only">Search adjust stock products</span>
+                <input
+                  type="search"
+                  value={adjustStockProductSearch}
+                  onChange={(event) => setAdjustStockProductSearch(event.target.value)}
+                  placeholder="Search products"
+                />
+              </label>
+            </div>
             <form className="form-grid" onSubmit={onAdjustStock}>
               <label>
                 Product
@@ -1013,20 +1113,23 @@ const App = () => {
                   required
                 >
                   <option value="">Select product</option>
-                  {products.map((product) => (
+                  {adjustStockProductOptions.map((product) => (
                     <option key={product.id} value={String(product.id)}>
                       {product.sku} - {product.name}
                     </option>
                   ))}
                 </select>
               </label>
+              {adjustStockProductSearch.trim() && matchingAdjustStockProducts.length === 0 ? (
+                <p className="form-helper">No products match your search.</p>
+              ) : null}
               <label>
-                Quantity Delta
+                Stock Change
                 <input
                   type="number"
                   value={adjustStock.qty_delta}
                   onChange={(event) => setAdjustStock((prev) => ({ ...prev, qty_delta: event.target.value }))}
-                  placeholder="Use negative for decrease"
+                  placeholder="Example: 10 to add stock, -3 to remove stock"
                   required
                 />
               </label>
@@ -1058,31 +1161,57 @@ const App = () => {
           <section className="panel transactions-card transactions-card--sale">
             <h2>Record Sale</h2>
             <form className="form-grid" onSubmit={onRecordSale}>
-              <label>
-                Product
-                <select
-                  value={newSale.product_id}
-                  onChange={(event) => setNewSale((prev) => ({ ...prev, product_id: event.target.value }))}
-                  required
-                >
-                  <option value="">Select product</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={String(product.id)}>
-                      {product.sku} - {product.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Quantity
-                <input
-                  type="number"
-                  value={newSale.qty}
-                  min={1}
-                  onChange={(event) => setNewSale((prev) => ({ ...prev, qty: event.target.value }))}
-                  required
-                />
-              </label>
+              <div className="sale-items-list" aria-label="Sale line items">
+                {newSaleItems.map((item, index) => {
+                  const productLabel = index === 0 ? "Product" : `Product ${index + 1}`;
+                  const quantityLabel = index === 0 ? "Quantity" : `Quantity ${index + 1}`;
+
+                  return (
+                    <div className="sale-item-row" key={index}>
+                      <div className="sale-item-fields">
+                        <label>
+                          {productLabel}
+                          <select
+                            value={item.product_id}
+                            onChange={(event) => onChangeSaleItem(index, "product_id", event.target.value)}
+                            required
+                          >
+                            <option value="">Select product</option>
+                            {products.map((product) => (
+                              <option key={product.id} value={String(product.id)}>
+                                {product.sku} - {product.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          {quantityLabel}
+                          <input
+                            type="number"
+                            value={item.qty}
+                            min={1}
+                            onChange={(event) => onChangeSaleItem(index, "qty", event.target.value)}
+                            required
+                          />
+                        </label>
+                      </div>
+                      {newSaleItems.length > 1 ? (
+                        <button
+                          type="button"
+                          className="danger-link sale-item-remove"
+                          onClick={() => onRemoveSaleItem(index)}
+                          aria-label={`Remove sale item ${index + 1}`}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" className="secondary-btn sale-add-item" onClick={onAddSaleItem}>
+                Add product
+              </button>
               <label>
                 Ordered By
                 <input
@@ -1109,7 +1238,18 @@ const App = () => {
           </section>
 
           <section className="panel panel-wide transactions-card transactions-card--snapshot">
-            <h2>Current Inventory Snapshot</h2>
+            <div className="panel-head panel-head--search">
+              <h2>Current Inventory Snapshot</h2>
+              <label className="search-field">
+                <span className="sr-only">Search current inventory snapshot</span>
+                <input
+                  type="search"
+                  value={inventorySnapshotSearch}
+                  onChange={(event) => setInventorySnapshotSearch(event.target.value)}
+                  placeholder="Search inventory"
+                />
+              </label>
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -1120,12 +1260,14 @@ const App = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {products.length === 0 ? (
+                  {inventorySnapshotProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={3}>No products loaded.</td>
+                      <td colSpan={3}>
+                        {products.length === 0 ? "No products loaded." : "No inventory rows match your search."}
+                      </td>
                     </tr>
                   ) : (
-                    products.map((product) => (
+                    inventorySnapshotProducts.map((product) => (
                       <tr key={product.id}>
                         <td>{product.sku}</td>
                         <td>{product.name}</td>
@@ -1144,7 +1286,16 @@ const App = () => {
                 <h2>Transaction History</h2>
                 <p className="meta transaction-history-copy">Sales saved from Record Sale appear here.</p>
               </div>
-              <div className="transaction-filters" aria-label="Transaction date filters">
+              <div className="transaction-filters" aria-label="Transaction filters">
+                <label className="search-field search-field--transaction">
+                  <span className="sr-only">Search transaction history</span>
+                  <input
+                    type="search"
+                    value={transactionSearch}
+                    onChange={(event) => onChangeTransactionSearch(event.target.value)}
+                    placeholder="Search transactions"
+                  />
+                </label>
                 <label className="transaction-filter-label">
                   From
                   <input
@@ -1201,8 +1352,9 @@ const App = () => {
                       <td colSpan={7}>
                         {isTransactionLoading
                           ? "Loading transactions..."
-                          : transactionTotal === 0 && (transactionDateFilter.from || transactionDateFilter.to)
-                            ? "No transactions match this date range."
+                          : transactionTotal === 0 &&
+                              (transactionDateFilter.from || transactionDateFilter.to || hasTransactionSearch)
+                            ? "No transactions match these filters."
                             : "No transactions recorded yet."}
                       </td>
                     </tr>

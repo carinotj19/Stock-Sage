@@ -1,3 +1,6 @@
+import { useState } from "react";
+
+import { matchesSearchQuery } from "../search";
 import type { StockoutRow } from "../types";
 
 type Props = {
@@ -8,6 +11,7 @@ type Props = {
 const FORECAST_HORIZON_DAYS = 30;
 
 export const StockoutCard = ({ rows, onSelectProduct }: Props) => {
+  const [searchQuery, setSearchQuery] = useState("");
   const today = new Date(new Date().toISOString().slice(0, 10));
 
   const timelineRows = [...rows]
@@ -70,15 +74,37 @@ export const StockoutCard = ({ rows, onSelectProduct }: Props) => {
       if (right.daysRemaining === null) return -1;
       return left.daysRemaining - right.daysRemaining;
     });
+  const filteredTimelineRows = timelineRows.filter((row) =>
+    matchesSearchQuery(searchQuery, [
+      row.sku,
+      row.name,
+      row.predicted_stockout_date,
+      row.suggested_qty,
+      row.countdown
+    ])
+  );
 
   return (
     <section className="panel panel-scroll panel-alert">
-      <h2>Predicted Stockout Timeline</h2>
+      <div className="panel-head panel-head--search">
+        <h2>Predicted Stockout Timeline</h2>
+        <label className="search-field">
+          <span className="sr-only">Search stockout timeline</span>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search timeline"
+          />
+        </label>
+      </div>
       <div className="stockout-grid">
-        {timelineRows.length === 0 ? (
-          <p className="empty">No forecast-based stockout risk detected.</p>
+        {filteredTimelineRows.length === 0 ? (
+          <p className="empty">
+            {timelineRows.length === 0 ? "No forecast-based stockout risk detected." : "No stockout rows match your search."}
+          </p>
         ) : (
-          timelineRows.map((row) => (
+          filteredTimelineRows.map((row) => (
             <details className={`stockout-item stockout-item--${row.level}`} key={row.product_id}>
               <summary className="stockout-summary">
                 <div>

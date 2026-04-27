@@ -110,6 +110,16 @@ def test_sales_posting_is_atomic_with_stock_movements() -> None:
     assert empty_sales_resp.json()["total"] == 0
     assert empty_sales_resp.json()["items"] == []
 
+    searched_sales_resp = client.get("/sales?search=bread")
+    assert searched_sales_resp.status_code == 200
+    assert searched_sales_resp.json()["total"] == 1
+    assert searched_sales_resp.json()["items"][0]["receipt_no"] == "RCPT-001"
+
+    unmatched_search_resp = client.get("/sales?search=no-match")
+    assert unmatched_search_resp.status_code == 200
+    assert unmatched_search_resp.json()["total"] == 0
+    assert unmatched_search_resp.json()["items"] == []
+
     bad_sale_resp = client.post(
         "/sales",
         json={
