@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ForecastItemModal } from "../src/components/ForecastItemModal";
@@ -72,6 +72,61 @@ describe("ForecastItemModal", () => {
     expect(container.querySelector(".modal-trend-line")).not.toBeNull();
     expect(container.querySelector(".modal-forecast-average-line")).not.toBeNull();
     expect(container.querySelector(".modal-forecast-divider")).not.toBeNull();
+  });
+
+  it("shows forecast point details when hovering the forecast chart", () => {
+    const { container } = render(
+      <ForecastItemModal
+        isOpen={true}
+        isLoading={false}
+        error={null}
+        onClose={() => {}}
+        item={{
+          product_id: 1,
+          sku: "CPU-AMD-3300",
+          name: "AMD Ryzen 3 3200",
+          forecast_horizon_days: 3,
+          predicted_per_month: 60,
+          in_stock: 10,
+          reorder_qty: 8,
+          confidence_pct: 80,
+          predicted_stockout_date: "2026-04-12",
+          days_until_stockout: 2,
+          when_to_buy_message: "Order 8 units now.",
+          demand_points: [
+            { date: "2026-04-01", units: 1, kind: "history" },
+            { date: "2026-04-02", units: 3, kind: "history" },
+            { date: "2026-04-03", units: 2, kind: "forecast" },
+            { date: "2026-04-04", units: 4, kind: "forecast" },
+            { date: "2026-04-05", units: 2, kind: "forecast" }
+          ],
+          price_analysis: {
+            store_price: "4500.00",
+            market_avg_price: "4300.00",
+            difference_pct: "4.65",
+            suggested_price: null,
+            competitor_benchmarks: []
+          }
+        }}
+      />
+    );
+
+    const hoverTarget = container.querySelector('[data-testid="forecast-hover-2026-04-04"]');
+    const chart = container.querySelector(".modal-chart");
+
+    expect(hoverTarget).not.toBeNull();
+    expect(chart).not.toBeNull();
+    expect(screen.queryByText("Predicted Demand : 4")).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(hoverTarget!);
+
+    expect(screen.getByText("Apr 4")).toBeInTheDocument();
+    expect(screen.getByText("Predicted Demand : 4")).toBeInTheDocument();
+    expect(screen.getByText("Average : 2.67")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(chart!);
+
+    expect(screen.queryByText("Predicted Demand : 4")).not.toBeInTheDocument();
   });
 
   it("keeps a 365-day history chart readable", () => {

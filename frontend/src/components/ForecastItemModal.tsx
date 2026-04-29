@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import type { ItemForecastDetail } from "../types";
 
 type Props = {
@@ -15,6 +17,9 @@ const DENSE_HISTORY_THRESHOLD = 120;
 const HISTORY_DOT_THRESHOLD = 90;
 const DENSE_AXIS_TICK_COUNT = 5;
 const DEFAULT_AXIS_TICK_COUNT = 2;
+const TOOLTIP_WIDTH = 190;
+const TOOLTIP_HEIGHT = 78;
+const TOOLTIP_GAP = 12;
 
 const toNumber = (value: string | null) => {
   if (value === null) return null;
@@ -65,8 +70,15 @@ const formatDate = (value: string) =>
   }).format(new Date(`${value}T00:00:00`));
 
 const formatUnits = (value: number, fractionDigits = 0) => value.toFixed(fractionDigits);
+const formatTooltipUnits = (value: number) => formatUnits(value, Number.isInteger(value) ? 0 : 2);
 
 export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: Props) => {
+  const [activeForecastDate, setActiveForecastDate] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveForecastDate(null);
+  }, [isOpen, item?.product_id]);
+
   if (!isOpen) return null;
 
   if (isLoading || error || !item) {
@@ -123,6 +135,19 @@ export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: P
     points.length,
     points.length > DENSE_HISTORY_THRESHOLD ? DENSE_AXIS_TICK_COUNT : DEFAULT_AXIS_TICK_COUNT
   );
+  const activeForecastPoint = forecastChartPoints.find((point) => point.date === activeForecastDate) ?? null;
+  const tooltipX = activeForecastPoint
+    ? Math.min(
+        Math.max(PADDING.left, activeForecastPoint.x + TOOLTIP_GAP),
+        CHART_WIDTH - PADDING.right - TOOLTIP_WIDTH
+      )
+    : 0;
+  const tooltipY = activeForecastPoint
+    ? Math.min(
+        Math.max(PADDING.top, activeForecastPoint.y - TOOLTIP_HEIGHT - TOOLTIP_GAP),
+        CHART_HEIGHT - PADDING.bottom - TOOLTIP_HEIGHT
+      )
+    : 0;
   const historyLineClassName =
     historyChartPoints.length > DENSE_HISTORY_THRESHOLD ? "modal-history-line modal-history-line--dense" : "modal-history-line";
 
@@ -244,6 +269,7 @@ export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: P
             viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
             role="img"
             aria-label="Demand chart showing actual sales history, demand trend, and forecast"
+            onMouseLeave={() => setActiveForecastDate(null)}
           >
             {[0, 0.25, 0.5, 0.75, 1].map((step) => {
               const y = PADDING.top + plotHeight * step;
@@ -302,6 +328,53 @@ export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: P
             {forecastChartPoints.map((point) => (
               <circle className="modal-forecast-dot" key={`f-${point.date}`} cx={point.x} cy={point.y} r={3.5} />
             ))}
+
+            {activeForecastPoint ? (
+              <g className="modal-chart-tooltip" aria-hidden="true">
+                <line
+                  className="modal-chart-active-rule"
+                  x1={activeForecastPoint.x}
+                  y1={PADDING.top}
+                  x2={activeForecastPoint.x}
+                  y2={PADDING.top + plotHeight}
+                />
+                <circle className="modal-chart-active-dot" cx={activeForecastPoint.x} cy={activeForecastPoint.y} r={5} />
+                <rect className="modal-chart-tooltip-box" x={tooltipX} y={tooltipY} width={TOOLTIP_WIDTH} height={TOOLTIP_HEIGHT} rx={4} />
+                <text className="modal-chart-tooltip-title" x={tooltipX + 12} y={tooltipY + 22}>
+                  {formatDate(activeForecastPoint.date)}
+                </text>
+                <text className="modal-chart-tooltip-demand" x={tooltipX + 12} y={tooltipY + 48}>
+                  Predicted Demand : {formatTooltipUnits(activeForecastPoint.units)}
+                </text>
+                <text className="modal-chart-tooltip-average" x={tooltipX + 12} y={tooltipY + 70}>
+                  Average : {formatTooltipUnits(forecastAverageUnits)}
+                </text>
+              </g>
+            ) : null}
+
+            {forecastChartPoints.map((point, index) => {
+              const previousX = forecastChartPoints[index - 1]?.x ?? point.x - stepX;
+              const nextX = forecastChartPoints[index + 1]?.x ?? point.x + stepX;
+              const bandX = Math.max(PADDING.left, (previousX + point.x) / 2);
+              const bandWidth = Math.min(CHART_WIDTH - PADDING.right, (point.x + nextX) / 2) - bandX;
+
+              return (
+                <rect
+                  aria-label={`Show forecast tooltip for ${formatDate(point.date)}`}
+                  className="modal-chart-hover-target"
+                  data-testid={`forecast-hover-${point.date}`}
+                  key={`hover-${point.date}`}
+                  tabIndex={0}
+                  x={bandX}
+                  y={PADDING.top}
+                  width={Math.max(8, bandWidth)}
+                  height={plotHeight}
+                  onBlur={() => setActiveForecastDate(null)}
+                  onFocus={() => setActiveForecastDate(point.date)}
+                  onMouseEnter={() => setActiveForecastDate(point.date)}
+                />
+              );
+            })}
           </svg>
           <div className="modal-chart-axis">
             {axisTickIndices.map((index) => (

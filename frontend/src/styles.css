@@ -1443,6 +1443,61 @@ tbody tr:hover {
   stroke-width: 1.6;
 }
 
+.modal-chart-hover-target {
+  fill: transparent;
+  pointer-events: all;
+  cursor: crosshair;
+  outline: none;
+}
+
+.modal-chart-hover-target:focus-visible {
+  stroke: rgba(79, 124, 255, 0.6);
+  stroke-width: 1.5;
+}
+
+.modal-chart-tooltip {
+  pointer-events: none;
+}
+
+.modal-chart-active-rule {
+  stroke: #6f7785;
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.55;
+}
+
+.modal-chart-active-dot {
+  fill: #4f7cff;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.modal-chart-tooltip-box {
+  fill: #f7f2ea;
+  stroke: #d7cbbd;
+  stroke-width: 1;
+}
+
+.modal-chart-tooltip-title {
+  fill: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.modal-chart-tooltip-demand,
+.modal-chart-tooltip-average {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.modal-chart-tooltip-demand {
+  fill: #4f46c7;
+}
+
+.modal-chart-tooltip-average {
+  fill: #37a847;
+}
+
 .modal-chart-axis {
   margin-top: 0.42rem;
   display: flex;
