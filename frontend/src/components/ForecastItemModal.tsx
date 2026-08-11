@@ -154,7 +154,6 @@ export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: P
   const storePrice = toNumber(item.price_analysis.store_price);
   const marketAvg = toNumber(item.price_analysis.market_avg_price);
   const differencePct = toNumber(item.price_analysis.difference_pct);
-  const confidenceDisplay = item.confidence_pct === null ? "n/a" : `${item.confidence_pct.toFixed(0)}%`;
   const stockoutLabel =
     item.predicted_stockout_date === null
       ? "No stockout in horizon"
@@ -184,10 +183,6 @@ export const ForecastItemModal = ({ isOpen, item, isLoading, error, onClose }: P
           <article className="modal-metric">
             <p className="kpi-label">Reorder Qty</p>
             <p className="kpi-value">{item.reorder_qty}</p>
-          </article>
-          <article className="modal-metric">
-            <p className="kpi-label">Confidence</p>
-            <p className="kpi-value">{confidenceDisplay}</p>
           </article>
         </section>
 
