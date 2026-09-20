@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select
@@ -28,7 +29,7 @@ def test_job_cli_commands_execute_successfully() -> None:
     env["STOCK_SAGE_ALLOW_TEST_SQLITE"] = "1"
 
     forecast_run = subprocess.run(
-        ["py", "-3", "-m", "app.jobs.run_forecast_daily", "--horizon-days", "5"],
+        [sys.executable, "-m", "app.jobs.run_forecast_daily", "--horizon-days", "5"],
         cwd=backend_root,
         env=env,
         check=True,
@@ -38,7 +39,7 @@ def test_job_cli_commands_execute_successfully() -> None:
     assert "forecast_run_id=" in forecast_run.stdout
 
     scraper_run = subprocess.run(
-        ["py", "-3", "-m", "app.jobs.run_scraper_cycle"],
+        [sys.executable, "-m", "app.jobs.run_scraper_cycle"],
         cwd=backend_root,
         env=env,
         check=True,
