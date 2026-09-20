@@ -27,7 +27,9 @@ class AuthNotConfiguredError(RuntimeError):
 
 
 def is_auth_disabled() -> bool:
-    return os.getenv("STOCK_SAGE_AUTH_DISABLED", "").lower() in {"1", "true", "yes"}
+    requested = os.getenv("STOCK_SAGE_AUTH_DISABLED", "").lower() in {"1", "true", "yes"}
+    environment = os.getenv("STOCK_SAGE_ENV", "development").strip().lower()
+    return requested and environment not in {"production", "prod"}
 
 
 def _get_int_env(name: str, default: int, minimum: int) -> int:
