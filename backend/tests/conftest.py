@@ -1,5 +1,8 @@
 import os
+from pathlib import Path
 
+
+Path("data").mkdir(parents=True, exist_ok=True)
 
 # Test-only bootstrap so session module can import without a Neon connection.
 os.environ["STOCK_SAGE_IGNORE_DOTENV"] = "1"
