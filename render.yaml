@@ -10,9 +10,17 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
+      - key: STOCK_SAGE_ENV
+        value: production
       - key: STOCK_SAGE_IGNORE_DOTENV
         value: "1"
       - key: DATABASE_URL
         sync: false
       - key: CORS_ALLOW_ORIGINS
         sync: false
+      - key: ADMIN_SESSION_SECRET
+        sync: false
+      - key: ADMIN_COOKIE_SECURE
+        value: "true"
+      - key: ADMIN_COOKIE_SAMESITE
+        value: none
