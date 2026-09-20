@@ -36,7 +36,6 @@ If the link is not live yet, enable **Settings → Pages → Source → GitHub A
 | ORM & migrations | SQLAlchemy, Alembic |
 | Forecasting | pandas, NumPy, statsmodels, Prophet, XGBoost |
 | Backend hosting | Render |
-| Frontend hosting | Vercel |
 | Public preview | GitHub Pages |
 
 ## Project Layout
@@ -212,15 +211,6 @@ Example environment files are committed; real `.env` files are ignored.
 - `ADMIN_SESSION_SECRET`
 
 The blueprint also enables production mode, secure cookies, and cross-site cookie handling.
-
-### Vercel frontend
-
-Set:
-
-```env
-VITE_API_BASE_URL=https://<your-render-service>
-VITE_DEMO_MODE=false
-```
 
 ### GitHub Pages preview
 
