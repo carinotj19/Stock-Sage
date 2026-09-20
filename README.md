@@ -1,35 +1,64 @@
 # Stock Sage
 
-Stock Sage is a thesis-aligned inventory intelligence prototype. It combines inventory and sales management, daily demand forecasting, reorder recommendations, competitor price scraping, and dashboard reporting in a React + FastAPI stack.
+Stock Sage is an inventory intelligence web application for small retail operations. It combines inventory and sales tracking, daily demand forecasting, reorder recommendations, competitor price monitoring, and operational dashboards in a React + FastAPI stack.
 
-## Core Features
+## Public Demo
 
-- Inventory, supplier, and sales transaction management
-- Daily SKU-level forecasting with persisted confidence intervals
-- Reorder recommendations based on lead time, stock position, and forecast output
-- Forecast run validation snapshots and run-to-run comparison reporting
-- Competitor price scraping, source health reporting, and price comparison
-- Dashboard endpoints for stock, forecast, scraper, and pricing visibility
+A read-only browser demo is designed to run on GitHub Pages:
+
+**https://carinotj19.github.io/Stock-Sage/**
+
+The Pages build uses generated sample data in the browser. It does **not** connect to the production Render API or Neon database, and write operations are disabled.
+
+If the link is not live yet, enable **Settings → Pages → Source → GitHub Actions** after making the repository public. The workflow is already included at `.github/workflows/pages.yml`.
+
+## Features
+
+- Inventory and SKU management
+- Stock adjustments and sales transaction capture
+- Daily SKU-level demand forecasting
+- Persisted confidence intervals and forecast validation
+- Reorder recommendations using lead time, stock position, and forecast output
+- Predicted stockout visibility
+- Competitor price scraping and price comparison
+- Scraper source-health reporting
+- Role-based admin authentication and audit logging
+- Manual scraper workflow for administrators
+- Responsive React dashboard
 
 ## Stack
 
-- Frontend: React 18, TypeScript, Vite
-- Backend: Python 3.11, FastAPI, SQLAlchemy, Alembic
-- Database: Neon PostgreSQL
-- Forecasting dependencies: `statsmodels`, `prophet`, `xgboost`
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, TypeScript, Vite |
+| Backend | Python 3.11, FastAPI |
+| Database | PostgreSQL / Neon |
+| ORM & migrations | SQLAlchemy, Alembic |
+| Forecasting | pandas, NumPy, statsmodels, Prophet, XGBoost |
+| Backend hosting | Render |
+| Frontend hosting | Vercel |
+| Public preview | GitHub Pages |
 
 ## Project Layout
 
-- `frontend/` - dashboard UI
-- `backend/app/` - API routes, services, ML logic, jobs
-- `backend/tests/` - backend regression tests
-- `backend/data/` - generated forecast QA and validation reports
-- `docs/` - thesis alignment, runbooks, plans, architecture notes
-- `render.yaml` - Render deployment config for backend
+```text
+Stock-Sage/
+├── backend/
+│   ├── app/                 # API, services, jobs, ML, scrapers
+│   ├── alembic/             # Database migrations
+│   ├── scripts/             # Import/export and operational utilities
+│   └── tests/               # Backend regression tests
+├── frontend/
+│   ├── src/                 # React application
+│   └── tests/               # Frontend tests
+├── scripts/                 # Workspace development launcher
+├── .github/workflows/       # CI and GitHub Pages demo
+└── render.yaml              # Render backend blueprint
+```
 
-## Quick Start
+## Local Development
 
-### Backend
+### 1. Backend
 
 ```powershell
 cd backend
@@ -37,13 +66,16 @@ py -3 -m pip install -e ".[dev,forecast]"
 Copy-Item .env.example .env -Force
 ```
 
-Set `DATABASE_URL` in `backend/.env` to your Neon connection string. Also set the admin session signing secret:
+Edit `backend/.env` and set at minimum:
 
-```powershell
+```env
+STOCK_SAGE_ENV=development
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>/<database>?sslmode=require
 ADMIN_SESSION_SECRET=<long-random-secret>
+CORS_ALLOW_ORIGINS=http://localhost:5173
 ```
 
-Then migrate and create the first admin user:
+Run migrations, create an administrator, and start FastAPI:
 
 ```powershell
 py -3 -m alembic upgrade head
@@ -51,106 +83,156 @@ py -3 -m app.cli.create_admin --username admin
 py -3 -m uvicorn app.main:app --reload --port 8000
 ```
 
-Optional demo data seed:
+Optional demo seed:
 
 ```powershell
 py -3 scripts/seed_demo_data.py
 ```
 
-### Frontend
+### 2. Frontend
 
 ```powershell
 cd frontend
 npm ci
+Copy-Item .env.example .env -Force
+npm run dev
 ```
 
-Set `VITE_API_BASE_URL=http://localhost:8000`, then run:
+For normal local development:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+VITE_DEMO_MODE=false
+```
+
+### 3. Run Both Together
+
+After installing frontend and backend dependencies, the root launcher starts both development servers:
 
 ```powershell
 npm run dev
 ```
 
-### Run Both Frontend And Backend
+- API: `http://localhost:8000`
+- Vite frontend: `http://localhost:5173`
 
-After installing backend and frontend dependencies, you can start both servers from the repo root:
+## Public Demo Mode
 
-```powershell
-npm run dev
+The frontend supports a build-time demo mode:
+
+```env
+VITE_DEMO_MODE=true
 ```
 
-The root launcher starts:
+When enabled:
 
-- backend on `http://localhost:8000`
-- frontend in `frontend/` using Vite
+- authentication is replaced by a local `Demo Viewer` session,
+- dashboard data comes from `frontend/src/demoApi.ts`,
+- no production API requests are made,
+- inventory, sales, scraper, and other write operations are read-only,
+- settings/admin controls are not exposed.
+
+The GitHub Pages workflow builds this mode automatically.
 
 ## Scheduled Jobs
 
-Run the daily forecast job:
+Daily forecast:
 
 ```powershell
 cd backend
 py -3 -m app.jobs.run_forecast_daily --horizon-days 30
 ```
 
-Run the scraper cycle:
+Competitor scraper cycle:
 
 ```powershell
 cd backend
 py -3 -m app.jobs.run_scraper_cycle --verbose
 ```
 
-Generated forecast QA and validation reports are written to `backend/data/`.
-
 ## Testing
 
-Backend tests:
+Backend:
 
 ```powershell
 cd backend
 py -3 -m pytest -q
 ```
 
-Frontend tests:
+Frontend:
 
 ```powershell
 cd frontend
 npm test
+npm run build
 ```
+
+Workspace launcher:
+
+```powershell
+npm run test:dev-stack
+```
+
+GitHub Actions runs these checks automatically on pushes to `main` and on pull requests.
 
 ## Configuration
 
-| Variable | Scope | Purpose |
-|---|---|---|
-| `DATABASE_URL` | Backend | Neon PostgreSQL connection string |
-| `CORS_ALLOW_ORIGINS` | Backend | Allowed frontend origins |
-| `ADMIN_SESSION_SECRET` | Backend | Secret used to sign admin session cookies |
-| `ADMIN_SESSION_TTL_SECONDS` | Backend | Admin session lifetime, defaults to `86400` |
-| `ADMIN_COOKIE_SECURE` | Backend | Set to `true` for HTTPS deployments |
-| `ADMIN_COOKIE_SAMESITE` | Backend | Use `none` for cross-site hosted frontend/backend domains |
-| `VITE_API_BASE_URL` | Frontend | Base URL for the FastAPI backend |
+### Backend
 
-Backend example env lives in [backend/.env.example](./backend/.env.example).
+| Variable | Purpose |
+|---|---|
+| `STOCK_SAGE_ENV` | Runtime mode; hosted deployments should use `production` |
+| `DATABASE_URL` | PostgreSQL/Neon connection string |
+| `CORS_ALLOW_ORIGINS` | Comma-separated trusted frontend origins |
+| `ADMIN_SESSION_SECRET` | Secret used to sign admin session cookies |
+| `ADMIN_SESSION_TTL_SECONDS` | Session lifetime; defaults to 86400 seconds |
+| `ADMIN_COOKIE_SECURE` | Must be `true` for HTTPS deployments |
+| `ADMIN_COOKIE_SAMESITE` | Use `none` when frontend/backend are hosted cross-site |
+| `STOCK_SAGE_IGNORE_DOTENV` | Ignore local `.env` loading in hosted environments |
+
+`STOCK_SAGE_AUTH_DISABLED` is intended only for local/testing convenience and is ignored when `STOCK_SAGE_ENV=production`.
+
+### Frontend
+
+| Variable | Purpose |
+|---|---|
+| `VITE_API_BASE_URL` | FastAPI base URL in normal application mode |
+| `VITE_DEMO_MODE` | Enables the browser-only read-only demo |
+
+Example environment files are committed; real `.env` files are ignored.
 
 ## Deployment
 
-- Frontend: Vercel
-- Backend: Render using [render.yaml](./render.yaml)
-- Database: Neon PostgreSQL
+### Render backend
 
-Backend deployment currently expects:
+`render.yaml` configures the FastAPI service and requires these secrets/settings:
 
 - `DATABASE_URL`
 - `CORS_ALLOW_ORIGINS`
+- `ADMIN_SESSION_SECRET`
 
-Frontend deployment currently expects:
+The blueprint also enables production mode, secure cookies, and cross-site cookie handling.
 
-- `VITE_API_BASE_URL`
+### Vercel frontend
 
-## Thesis Scope Notes
+Set:
 
-The current codebase is aligned to the manuscript as a web-based prototype, not a mobile app. The strongest completed areas are architecture, core workflows, and operational reporting. The main remaining thesis-completion items are:
+```env
+VITE_API_BASE_URL=https://<your-render-service>
+VITE_DEMO_MODE=false
+```
 
-- explainability and manual override workflow
-- automated low-stock notification delivery
-- completed usability study and results write-up
-- continued forecast-quality improvement on difficult mature-but-bursty SKUs
+### GitHub Pages preview
+
+The `.github/workflows/pages.yml` workflow builds only the read-only demo. It intentionally receives no production secrets.
+
+## Security Notes
+
+- Never commit `.env` files, database URLs, session secrets, API keys, or production exports.
+- Browser write requests with an `Origin` header are accepted only from origins listed in `CORS_ALLOW_ORIGINS`.
+- Production mode refuses the local authentication-bypass flag.
+- Public demo data is synthetic and isolated from production services.
+
+## Project Context
+
+Stock Sage began as a thesis-aligned prototype and has grown into a fuller inventory-intelligence application. The repository retains forecasting experiments and operational tooling because they document how model quality, scraper reliability, and inventory workflows are validated in practice.
