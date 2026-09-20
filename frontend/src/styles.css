@@ -1986,3 +1986,30 @@ tbody tr:hover {
     width: 100%;
   }
 }
+
+
+/* Public GitHub Pages demo */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 auto 1rem;
+  padding: 0.8rem 1rem;
+  max-width: 1200px;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.08);
+  font-size: 0.92rem;
+}
+
+.demo-banner strong {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  .demo-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+}
