@@ -14,12 +14,12 @@ def test_health() -> None:
 
 def test_parse_cors_allow_origins_normalizes_common_env_values() -> None:
     assert _parse_cors_allow_origins(
-        " https://stock-sage-blue.vercel.app/, 'http://localhost:5173/' ,https://stock-sage-blue.vercel.app"
-    ) == ["https://stock-sage-blue.vercel.app", "http://localhost:5173"]
+        " https://stock-sage.example/, 'http://localhost:5173/' ,https://stock-sage.example"
+    ) == ["https://stock-sage.example", "http://localhost:5173"]
 
 
 def test_cors_preflight_allows_origin_when_env_has_trailing_slash(monkeypatch) -> None:
-    origin = "https://stock-sage-blue.vercel.app"
+    origin = "https://stock-sage.example"
     monkeypatch.setenv("CORS_ALLOW_ORIGINS", f"{origin}/")
     app_with_cors = create_app()
 
@@ -37,7 +37,7 @@ def test_cors_preflight_allows_origin_when_env_has_trailing_slash(monkeypatch) -
 
 
 def test_unhandled_backend_errors_keep_cors_headers(monkeypatch) -> None:
-    origin = "https://stock-sage-blue.vercel.app"
+    origin = "https://stock-sage.example"
     monkeypatch.setenv("CORS_ALLOW_ORIGINS", origin)
     app_with_cors = create_app()
 
@@ -56,7 +56,7 @@ def test_unhandled_backend_errors_keep_cors_headers(monkeypatch) -> None:
 def test_forecast_report_backend_error_returns_cors_json(monkeypatch) -> None:
     from app.services.dashboard_service import DashboardService
 
-    origin = "https://stock-sage-blue.vercel.app"
+    origin = "https://stock-sage.example"
     monkeypatch.setenv("CORS_ALLOW_ORIGINS", origin)
 
     def fail_forecast_report(self, **kwargs) -> None:  # noqa: ANN001, ARG001
