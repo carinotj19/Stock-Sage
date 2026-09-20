@@ -19,6 +19,27 @@ from app.services.auth_service import require_authenticated_user
 logger = logging.getLogger(__name__)
 
 
+class TrustedWriteOriginMiddleware:
+    UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+    def __init__(self, app: ASGIApp, allowed_origins: list[str]) -> None:
+        self.app = app
+        self.allowed_origins = set(allowed_origins)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("method", "").upper() in self.UNSAFE_METHODS:
+            headers = {key.lower(): value for key, value in scope.get("headers", [])}
+            raw_origin = headers.get(b"origin")
+            if raw_origin:
+                origin = raw_origin.decode("latin-1").strip().rstrip("/")
+                if origin not in self.allowed_origins:
+                    response = JSONResponse({"detail": "Origin is not allowed."}, status_code=403)
+                    await response(scope, receive, send)
+                    return
+
+        await self.app(scope, receive, send)
+
+
 class UnhandledExceptionMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -56,6 +77,7 @@ def create_app() -> FastAPI:
     )
     origins = _parse_cors_allow_origins(cors_allow_origins)
     app.add_middleware(UnhandledExceptionMiddleware)
+    app.add_middleware(TrustedWriteOriginMiddleware, allowed_origins=origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
