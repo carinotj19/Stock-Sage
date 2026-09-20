@@ -10,6 +10,15 @@ Thumbs.db
 !.env.example
 !.env.*.example
 
+# Sensitive credential material
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+secrets*.json
+
 # Python artifacts
 __pycache__/
 *.py[cod]
