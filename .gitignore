@@ -47,12 +47,9 @@ htmlcov/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
-frontend/.vercel/
 frontend/coverage/
 *.tsbuildinfo
 
-# Deployment local state
-.vercel/
 
 # Logs / test outputs
 *.log
