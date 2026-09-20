@@ -1,46 +1,67 @@
 # Stock Sage Backend
 
-Local FastAPI backend for inventory, forecasting, and price comparison.
+FastAPI backend for Stock Sage inventory, forecasting, pricing, and administrative workflows.
 
-## Quick Start
+## Local Setup
 
-```bash
+```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+pip install -e ".[dev,forecast]"
 Copy-Item .env.example .env -Force
-# Put your Neon URL into DATABASE_URL in .env (or run scripts/use_neon.ps1 to write it)
-powershell -ExecutionPolicy Bypass -File scripts/use_neon.ps1 -ConnectionString "<your_neon_url>"
+```
+
+Set a PostgreSQL/Neon connection string and a long random session secret in `.env`, then run:
+
+```powershell
 alembic upgrade head
+python -m app.cli.create_admin --username admin
 uvicorn app.main:app --reload
 ```
+
+On Linux/macOS, activate the virtual environment with the shell-appropriate command and use `python` instead of the Windows launcher.
 
 ## Tests
 
 ```bash
-pytest -v
+python -m pytest -q
 ```
 
-## Deploy Backend on Render (Free)
+Tests use SQLite only when `STOCK_SAGE_ALLOW_TEST_SQLITE=1`; normal runtime configuration requires PostgreSQL.
 
-This repo includes a root `render.yaml` configured for the backend service.
+## Production Deployment
+
+The repository root contains `render.yaml` for the backend service.
 
 Required Render environment variables:
 
-- `DATABASE_URL` (Neon URL using `postgresql+psycopg://...`)
-- `CORS_ALLOW_ORIGINS` (comma-separated, include your Vercel frontend URL)
-- `ADMIN_SESSION_SECRET` (long random value used to sign admin cookies)
-- `ADMIN_COOKIE_SECURE=true`
-- `ADMIN_COOKIE_SAMESITE=none` when the frontend and backend are on different hosted domains
+- `DATABASE_URL`
+- `CORS_ALLOW_ORIGINS`
+- `ADMIN_SESSION_SECRET`
 
-After migrations run, create the first admin user from a backend shell:
+The blueprint sets:
+
+- `STOCK_SAGE_ENV=production`
+- `STOCK_SAGE_IGNORE_DOTENV=1`
+- `ADMIN_COOKIE_SECURE=true`
+- `ADMIN_COOKIE_SAMESITE=none`
+
+Production mode ignores `STOCK_SAGE_AUTH_DISABLED`, so the local/test bypass cannot disable hosted authentication.
+
+`CORS_ALLOW_ORIGINS` is also used as the trusted-origin list for browser write requests. Include the exact hosted frontend origin and do not use a wildcard with credentialed requests.
+
+After migrations run, create the first admin account from a backend shell:
 
 ```bash
 python -m app.cli.create_admin --username admin
 ```
 
-Notes:
+The Render start command runs migrations before starting Uvicorn:
 
-- `STOCK_SAGE_IGNORE_DOTENV=1` is set in `render.yaml`, so Render uses dashboard env vars instead of `backend/.env`.
-- Start command runs migrations on deploy:
-  - `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+```bash
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+## Secrets
+
+Keep real `.env` files, Neon credentials, session secrets, webhook URLs, and generated production exports outside Git. Only placeholder example configuration should be committed.
