@@ -76,3 +76,30 @@ def test_forecast_report_backend_error_returns_cors_json(monkeypatch) -> None:
     assert response.json()["detail"] == (
         "Forecast report failed on the backend. Check Render logs for forecast_report_failed."
     )
+
+
+
+def test_unsafe_browser_write_rejects_untrusted_origin(monkeypatch) -> None:
+    allowed_origin = "https://stock-sage.example"
+    monkeypatch.setenv("CORS_ALLOW_ORIGINS", allowed_origin)
+    app_with_cors = create_app()
+
+    @app_with_cors.post("/write-probe")
+    def write_probe() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app_with_cors) as test_client:
+        rejected = test_client.post(
+            "/write-probe",
+            headers={"Origin": "https://untrusted.example"},
+        )
+        allowed = test_client.post(
+            "/write-probe",
+            headers={"Origin": allowed_origin},
+        )
+
+    assert rejected.status_code == 403
+    assert rejected.json() == {"detail": "Origin is not allowed."}
+    assert allowed.status_code == 200
+    assert allowed.json() == {"ok": True}
+    assert allowed.headers["access-control-allow-origin"] == allowed_origin
