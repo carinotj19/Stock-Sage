@@ -7,6 +7,7 @@ import { PriceComparisonTable } from "./components/PriceComparisonTable";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SourceQualityPanel } from "./components/SourceQualityPanel";
 import { StockoutCard } from "./components/StockoutCard";
+import { demoRequestJson } from "./demoApi";
 import { matchesSearchQuery } from "./search";
 import type {
   ItemForecastDetail,
@@ -24,6 +25,7 @@ import type {
 import "./styles.css";
 import type { InventoryProductUpdatePayload } from "./components/InventoryProductsTable";
 
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const PRODUCT_CATEGORY_OPTIONS = ["Case", "Cooler", "CPU", "GPU", "Motherboard", "PSU", "RAM", "SSD"];
 const ITEM_FORECAST_HISTORY_DAYS = 365;
@@ -76,6 +78,8 @@ const readApiError = async (response: Response) => {
 };
 
 const requestJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+  if (DEMO_MODE) return demoRequestJson<T>(path, init);
+
   const requestUrl = `${API_BASE_URL}${path}`;
   let response: Response;
 
@@ -197,6 +201,14 @@ const App = () => {
   const [newSaleItems, setNewSaleItems] = useState<SaleFormItem[]>([buildSaleFormItem()]);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+
+  const showDemoReadOnly = () => {
+    setActionMessage("Public demo is read-only. Clone the repository to try inventory, sales, and scraping write operations.");
+    setToastNotification({
+      title: "Demo mode",
+      copy: "Sample data is local to this browser build; production services are never contacted."
+    });
+  };
 
   const todayString = new Date().toISOString().slice(0, 10);
   const lowStockCount = lowStock.length;
@@ -328,6 +340,10 @@ const App = () => {
   };
 
   const onLogout = async () => {
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     try {
       await requestJson<AuthStatus>("/auth/logout", { method: "POST" });
     } catch {
@@ -597,6 +613,10 @@ const App = () => {
 
   const onCreateProduct = async (event: FormEvent) => {
     event.preventDefault();
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     try {
       await requestJson<ProductRow>("/products", {
@@ -637,6 +657,10 @@ const App = () => {
 
   const onAdjustStock = async (event: FormEvent) => {
     event.preventDefault();
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     try {
       await requestJson("/inventory/adjust", {
@@ -661,6 +685,10 @@ const App = () => {
   };
 
   const onSaveProduct = async (productId: number, payload: InventoryProductUpdatePayload) => {
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     try {
       await requestJson<ProductRow>(`/products/${productId}`, {
@@ -677,6 +705,10 @@ const App = () => {
   };
 
   const onDeleteProduct = async (productId: number) => {
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     try {
       await requestJson<ProductRow>(`/products/${productId}`, {
@@ -692,6 +724,10 @@ const App = () => {
 
   const onRecordSale = async (event: FormEvent) => {
     event.preventDefault();
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     const saleItems = newSaleItems.map((item) => ({
       product_id: Number(item.product_id),
@@ -750,6 +786,10 @@ const App = () => {
   };
 
   const onRunManualScrape = async () => {
+    if (DEMO_MODE) {
+      showDemoReadOnly();
+      return;
+    }
     setActionMessage(null);
     setApiError(null);
     setIsScraping(true);
@@ -853,6 +893,13 @@ const App = () => {
 
   return (
     <main className="dashboard-shell">
+      {DEMO_MODE ? (
+        <div className="demo-banner" role="note">
+          <strong>Public demo</strong>
+          <span>Sample data only. This build never connects to the production API or database.</span>
+        </div>
+      ) : null}
+
       {toastNotification ? (
         <div className="toast-notification toast-notification--success" role="status" aria-live="polite">
           <div className="toast-notification-icon" aria-hidden="true">
@@ -909,12 +956,19 @@ const App = () => {
           <button className="refresh-btn" onClick={() => void loadData()}>
             Refresh Data
           </button>
-          <button className="secondary-btn" disabled={isScraping} onClick={() => void onRunManualScrape()}>
-            {isScraping ? "Scraping..." : "Run Web Scrape"}
+          <button
+            className="secondary-btn"
+            disabled={DEMO_MODE || isScraping}
+            onClick={() => void onRunManualScrape()}
+            title={DEMO_MODE ? "Disabled in the public demo" : undefined}
+          >
+            {DEMO_MODE ? "Web Scrape (Demo)" : isScraping ? "Scraping..." : "Run Web Scrape"}
           </button>
-          <button className="secondary-btn" onClick={() => void onLogout()}>
-            Sign Out
-          </button>
+          {!DEMO_MODE ? (
+            <button className="secondary-btn" onClick={() => void onLogout()}>
+              Sign Out
+            </button>
+          ) : null}
         </div>
         <div className="meta-row">
           <p className="meta account-meta">
