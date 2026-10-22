@@ -24,6 +24,7 @@ describe("PriceComparisonTable", () => {
 
     expect(screen.getByRole("columnheader", { name: "Store Price" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Competitor Price" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Competitiveness" })).not.toBeInTheDocument();
   });
 
   it("opens the forecast detail from the whole row without an action button", () => {

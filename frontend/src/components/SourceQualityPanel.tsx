@@ -26,15 +26,6 @@ export const SourceQualityPanel = ({ rows, windowHours = 24 }: Props) => {
     return right.matched_skus_24h - left.matched_skus_24h;
   });
 
-  const classifyCoverage = (row: ScraperSourceQualityRow) => {
-    if (row.degraded) return "degraded";
-    if (row.stale) return "stale";
-    const coverage = row.effective_coverage_pct_24h ?? row.coverage_pct_24h;
-    if (coverage >= 80) return "strong";
-    if (coverage >= 50) return "fair";
-    return "weak";
-  };
-
   return (
     <section className="panel panel-source-quality">
       <h2>Scraper Source Quality ({windowHours}h)</h2>
@@ -48,17 +39,15 @@ export const SourceQualityPanel = ({ rows, windowHours = 24 }: Props) => {
               <th className="align-right">Matched SKUs</th>
               <th className="align-right">Snapshots</th>
               <th>Latest</th>
-              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={7}>No competitor sources configured.</td>
+                <td colSpan={6}>No competitor sources configured.</td>
               </tr>
             ) : (
               sortedRows.map((row) => {
-                const coverageClass = classifyCoverage(row);
                 const coverageValue = row.effective_coverage_pct_24h ?? row.coverage_pct_24h;
                 return (
                   <tr key={row.source_id}>
@@ -68,19 +57,6 @@ export const SourceQualityPanel = ({ rows, windowHours = 24 }: Props) => {
                     <td className="align-right">{row.matched_skus_24h}</td>
                     <td className="align-right">{row.snapshots_24h}</td>
                     <td>{formatLatest(row.minutes_since_latest)}</td>
-                    <td>
-                      {coverageClass === "degraded" ? (
-                        <span className="status-pill status-pill--danger">Degraded</span>
-                      ) : coverageClass === "strong" ? (
-                        <span className="status-pill status-pill--healthy">Strong</span>
-                      ) : coverageClass === "fair" ? (
-                        <span className="status-pill status-pill--caution">Fair</span>
-                      ) : coverageClass === "stale" ? (
-                        <span className="status-pill status-pill--danger">Stale</span>
-                      ) : (
-                        <span className="status-pill status-pill--warning">Weak</span>
-                      )}
-                    </td>
                   </tr>
                 );
               })

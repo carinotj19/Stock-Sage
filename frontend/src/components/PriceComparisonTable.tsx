@@ -36,27 +36,18 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
               <th className="align-right">Store Price</th>
               <th className="align-right">Competitor Price</th>
               <th>Difference</th>
-              <th>Competitiveness</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={5}>No competitor snapshots available.</td>
+                <td colSpan={4}>No competitor snapshots available.</td>
               </tr>
             ) : (
               rows.map((row) => {
-                const storePrice = toNumber(row.store_price) ?? 0;
                 const competitorPrice = toNumber(row.cheapest_competitor_price);
                 const gapValue = Math.abs(toNumber(row.price_gap) ?? 0);
                 const signedDiff = competitorPrice === null ? null : row.is_above_cheapest ? -gapValue : gapValue;
-                const normalizedGap = storePrice > 0 ? Math.min(1, gapValue / storePrice) : 0;
-                const competitiveness =
-                  competitorPrice === null
-                    ? 100
-                    : row.is_above_cheapest
-                      ? Math.max(0, Math.round(100 - normalizedGap * 100))
-                      : Math.min(100, Math.round(85 + normalizedGap * 100));
 
                 return (
                   <tr
@@ -80,14 +71,6 @@ export const PriceComparisonTable = ({ rows, onSelectProduct }: Props) => {
                       ) : (
                         <span className="price-delta price-delta--positive">🟢 +{formatPHP(String(signedDiff))}</span>
                       )}
-                    </td>
-                    <td>
-                      <div className="score-stack" title={`${competitiveness}%`}>
-                        <div className="score-meter">
-                          <div className="score-fill" style={{ width: `${competitiveness}%` }} />
-                        </div>
-                        <span className="score-label">{competitiveness}%</span>
-                      </div>
                     </td>
                   </tr>
                 );

@@ -86,6 +86,9 @@ describe("Dashboard rendering", () => {
     expect(await screen.findByText("Low Stock Alerts")).toBeInTheDocument();
     expect(await screen.findByText("Predicted Stockout Timeline")).toBeInTheDocument();
     expect(await screen.findByText("Price Comparison Results")).toBeInTheDocument();
+    const sourceQuality = screen.getByText("Scraper Source Quality (24h)").closest("section");
+    expect(sourceQuality).not.toBeNull();
+    expect(within(sourceQuality!).queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     expect(screen.queryByText("Sales Trend")).not.toBeInTheDocument();
   });
 
@@ -445,8 +448,7 @@ describe("Dashboard rendering", () => {
       );
     });
     expect(scrapePolls).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /show debug console/i }));
-    expect(await screen.findByLabelText("Manual web scrape debug console")).toHaveTextContent("Scraper completed.");
+    expect(screen.queryByRole("button", { name: /debug console/i })).not.toBeInTheDocument();
     expect(await screen.findByText("Manual web scraping completed. 3 competitor price snapshots saved.")).toBeInTheDocument();
   });
 

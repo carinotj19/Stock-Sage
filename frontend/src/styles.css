@@ -770,31 +770,6 @@ tbody tr:hover {
   color: var(--muted-ink);
 }
 
-.score-stack {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.score-meter {
-  width: 94px;
-  height: 8px;
-  background: #ece5d8;
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.score-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #f97316, #2f8f7b);
-}
-
-.score-label {
-  font-size: 0.76rem;
-  font-weight: 700;
-  color: var(--muted-ink);
-}
-
 .panel-trend {
   min-height: 300px;
 }
@@ -1338,29 +1313,6 @@ tbody tr:hover {
 
 .scrape-modal-error {
   margin-top: 0.75rem;
-}
-
-.scrape-console-shell {
-  margin-top: 0.85rem;
-}
-
-.scrape-console-toggle {
-  width: 100%;
-}
-
-.scrape-debug-console {
-  max-height: 220px;
-  margin: 0.7rem 0 0;
-  overflow: auto;
-  border: 1px solid #d8ccb7;
-  border-radius: 10px;
-  background: #132135;
-  color: #e8f6f2;
-  padding: 0.8rem;
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
 }
 
 .scrape-modal-actions {

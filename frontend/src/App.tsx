@@ -150,7 +150,6 @@ const App = () => {
   const [isScraping, setIsScraping] = useState<boolean>(false);
   const [scrapeJob, setScrapeJob] = useState<ManualScrapeJobStatus | null>(null);
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(null);
-  const [isScrapeConsoleOpen, setIsScrapeConsoleOpen] = useState<boolean>(false);
   const [toastNotification, setToastNotification] = useState<ToastNotification | null>(null);
 
   const [lowStock, setLowStock] = useState<LowStockRow[]>([]);
@@ -793,7 +792,6 @@ const App = () => {
     setActionMessage(null);
     setApiError(null);
     setIsScraping(true);
-    setIsScrapeConsoleOpen(false);
     try {
       const job = await requestJson<ManualScrapeJobStatus>("/prices/scrape/jobs", { method: "POST" });
       setScrapeJob(job);
@@ -811,11 +809,6 @@ const App = () => {
     if (isScrapeJobRunning(scrapeJob)) return;
     setScrapeJob(null);
     setScrapeJobId(null);
-    setIsScrapeConsoleOpen(false);
-  };
-
-  const onToggleScrapeConsole = () => {
-    setIsScrapeConsoleOpen((prev) => !prev);
   };
 
   const formatScrapeElapsed = (job: ManualScrapeJobStatus | null) => {
@@ -1560,17 +1553,6 @@ const App = () => {
             {scrapeJob.status === "failed" ? (
               <p className="status status-error scrape-modal-error">{scrapeJob.error ?? scrapeJob.message}</p>
             ) : null}
-
-            <div className="scrape-console-shell">
-              <button className="secondary-btn scrape-console-toggle" type="button" onClick={onToggleScrapeConsole}>
-                {isScrapeConsoleOpen ? "Hide Debug Console" : "Show Debug Console"}
-              </button>
-              {isScrapeConsoleOpen ? (
-                <pre className="scrape-debug-console" aria-label="Manual web scrape debug console">
-                  {scrapeJob.logs.length > 0 ? scrapeJob.logs.join("\n") : "No debug logs yet."}
-                </pre>
-              ) : null}
-            </div>
 
             {!isScrapeJobRunning(scrapeJob) ? (
               <div className="scrape-modal-actions">
